@@ -1,0 +1,30 @@
+# ROOT data and analysis outputs
+*.root
+*.root.tmp
+*_parts/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# C/C++ and ROOT build products
+*.o
+*.o.d
+*.so
+*.a
+*_Dict.cxx
+*_rdict.pcm
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Local editor files
+.vscode/
+.idea/
+*~
+
