@@ -1,0 +1,7 @@
+#A List for all the angles of Diamant in respect to the beam
+#(the same system as exogam to keep it simple)
+#
+# Angles are in Degree
+#Detetector	Theta	Phi
+0	13	54
+1	16	58

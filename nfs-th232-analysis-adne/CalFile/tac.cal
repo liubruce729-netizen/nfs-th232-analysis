@@ -1,0 +1,4 @@
+-194.18636   0.013246 0.0      !FT_CFD
+-179.49477   0.012439  0.0    !BAF2_HF_basing_on_entire_range_and_beam_pulsig
+-148.099168  0.044933  0.0     !FT_HF
+-109     0.011724  0.0     !CFD_HF_giving_ns__prompt_gamma_at_0_ns

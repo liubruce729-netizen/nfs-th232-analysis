@@ -1,0 +1,11 @@
+/data/lise2022X/test/acquisition/run/run_1186.dat.13-07-22_14h26m13s
+/data/lise2022X/test/acquisition/run/run_1186.dat.13-07-22_14h26m13s.1
+/data/lise2022X/test/acquisition/run/run_1186.dat.13-07-22_14h26m13s.2
+/data/lise2022X/test/acquisition/run/run_1186.dat.13-07-22_14h26m13s.3
+/data/lise2022X/test/acquisition/run/run_1186.dat.13-07-22_14h26m13s.4
+/data/lise2022X/test/acquisition/run/run_1187.dat.13-07-22_16h31m35s
+/data/lise2022X/test/acquisition/run/run_1187.dat.13-07-22_16h31m35s.1
+/data/lise2022X/test/acquisition/run/run_1187.dat.13-07-22_16h31m35s.2
+/data/lise2022X/test/acquisition/run/run_1187.dat.13-07-22_16h31m35s.3
+/data/lise2022X/test/acquisition/run/run_1187.dat.13-07-22_16h31m35s.4
+

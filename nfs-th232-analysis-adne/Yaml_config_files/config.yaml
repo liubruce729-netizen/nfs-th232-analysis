@@ -1,0 +1,138 @@
+nfs_exo_ana:
+  tree: true
+  spec: true
+  raw_tree: false  # copy event-built MFM events into RawTree without cuts
+  crystal_time_correction: true
+  correction_path: "/home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne/out/nfs_histoExogam2_1_deltaT_gamma_flash_fit.txt"
+
+analysis:
+  filename: "ListRun.txt"
+  spectra_port: 9095
+  tree_exogam2: false 
+  tree_trigger: false 
+  tree_MW: false 
+  tree_CsI: false 
+  tree_Neda: false 
+  tree_Paris: false 
+  tree_Generic: false 
+  tree_EbyE: false 
+  tree_exogam2REA: false 
+  tree_VamosIC: false 
+  OnlyTreeConversion: false #if false, Treat() methods will be ran
+ 
+spy:
+  ip_adress: "172.16.110.205"  #Narval IP server
+  spy_port: 10202	       #Narval Port on the IP server
+  spectra_port: 9095	       #Spectra server Port 
+  
+Guser:
+  debug_flag: false
+  spec_exogam2: false 
+  spec_trigger: false 
+  spec_MW: false 
+  spec_CsI: false 
+  spec_Neda: false 
+  spec_Paris: false 
+  spec_Generic: false 
+  spec_EbyE: false 
+  spec_exogam2REA: false 
+  spec_VamosIC: false
+  exogam2:
+    readcal_file: true
+    use_default_cal: false
+    clover0: false
+    clover1: false    
+    clover2: true
+    clover3: true
+    clover4: true    
+    clover5: true
+    clover6: true
+    clover7: true    
+    clover8: true
+    clover9: true
+    clover10: true    
+    clover11: true
+    clover12: true    
+    clover13: true
+    clover14: false    
+    clover15: false
+    clover0_Distance: 145.0
+    clover1_Distance: 145.0   
+    clover2_Distance: 145.0
+    clover3_Distance: 145.0
+    clover4_Distance: 145.0    
+    clover5_Distance: 145.0
+    clover6_Distance: 145.0
+    clover7_Distance: 145.0    
+    clover8_Distance: 145.0
+    clover9_Distance: 145.0
+    clover10_Distance: 145.0    
+    clover11_Distance: 145.0
+    clover12_Distance: 145.0     
+    clover13_Distance: 145.0
+    clover14_Distance: 145.0   
+    clover15_Distance: 145.0
+    SetTargetPosition: [0., 0., 0.]
+    SetPromptGate: [0,90000]
+    SetMaxClovMul: 16
+    SetBeta: 0.
+    broken_seg: false
+    missing_segments:
+     - [4,2,2] #clover core seg 4,2,2 means Gocce4_C_3
+     - [5,0,0] #clover core seg 4,2,2 means Gocce5_A_1
+    activate_gocce: true
+    activate_ess: true
+    ess_threshold: 40
+    activate_gocce_track2: false
+    activate_psa: false
+    nfs_neutron: true
+    nfs_distance: 8.6 #meters
+    nfs_gammaFlashOffset: -700.4 #ns
+    nfs_gammaG: 1454.21 #keV
+  exogam2REA:
+    readcal_file: true
+    use_default_cal: false
+    clover0: false
+    clover1: false    
+    clover2: false
+    clover3: true
+    clover4: true    
+    clover5: true
+    clover6: false
+    clover7: false    
+    clover8: false
+    clover9: false
+    clover10: false    
+    clover11: false
+    clover12: false    
+    clover13: false
+    clover14: false    
+    clover15: false
+    clover0_Distance: 145.0
+    clover1_Distance: 145.0   
+    clover2_Distance: 145.0
+    clover3_Distance: 145.0
+    clover4_Distance: 145.0    
+    clover5_Distance: 145.0
+    clover6_Distance: 145.0
+    clover7_Distance: 145.0    
+    clover8_Distance: 145.0
+    clover9_Distance: 145.0
+    clover10_Distance: 145.0    
+    clover11_Distance: 145.0
+    clover12_Distance: 145.0     
+    clover13_Distance: 145.0
+    clover14_Distance: 145.0   
+    clover15_Distance: 145.0
+    SetTargetPosition: [0., 0., 0.]
+    SetPromptGate: [0,90000]
+    SetMaxClovMul: 16
+    SetBeta: 0.
+    activate_gocce: true
+    activate_ess: true
+    ess_threshold: 40
+    activate_gocce_track2: false
+    activate_psa: false
+  paris:
+    SetBeta: 0.
+    readcal_file: true

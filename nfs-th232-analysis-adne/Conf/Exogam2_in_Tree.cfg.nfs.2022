@@ -1,0 +1,9 @@
+// EXOGAM TOpology / Geometry File 
+// Comment : NFS Configuration
+// Date : 30/08/2022 
+// Format : Flange_Nr Cristal_Nr Board_Id Channel_Id
+8 0 114 0
+8 1 114 1
+8 2 115 0
+8 3 115 1
+END

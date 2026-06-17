@@ -10,18 +10,57 @@ __pycache__/
 # Logs and temporary files
 *.log
 *.tmp
+*.bak*
 
 # C/C++ and ROOT build products
 *.o
 *.o.d
+*.d
 *.so
 *.a
 *_Dict.cxx
+*Dict.cxx
 *_rdict.pcm
+*.pcm
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
+
+# Local ADNE build/install/runtime paths
+nfs-th232-analysis-adne/AnalysisADNE
+nfs-th232-analysis-adne/SpyAnalysisADNE
+nfs-th232-analysis-adne/install/
+nfs-th232-analysis-adne/data
+nfs-th232-analysis-adne/out
+nfs-th232-analysis-adne/Utils/out
+
+# Bundled historical ADNE material not needed for this NFS branch
+nfs-th232-analysis-adne/Images/
+nfs-th232-analysis-adne/Utils/
+nfs-th232-analysis-adne/old/
+nfs-th232-analysis-adne/CutNWall/CutNWall
+nfs-th232-analysis-adne/extract_nfs_energy_peaks.C
+
+# Common binary/document artifacts
+.svn/
+*.png
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.ico
+*.pptx
+*.xlsx
+*.ods
+*.spe
+*.tar
+*.exe
+*.sec
+*.pdf
+*.mat
+*.out
+install_manifest.txt
 
 # Local editor files
 .vscode/
