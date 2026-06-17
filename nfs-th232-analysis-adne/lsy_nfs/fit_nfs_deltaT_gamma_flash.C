@@ -1,5 +1,5 @@
-// Fit gamma-flash peaks in NFS EXOGAM crystal DeltaT spectra.
-// 拟合 NFS EXOGAM 每个 crystal DeltaT 谱中的 gamma flash 峰。
+// Fit gamma-flash peaks in NFS EXOGAM crystal Time/DeltaT spectra.
+// 拟合 NFS EXOGAM 每个 crystal Time/DeltaT 谱中的 gamma flash 峰。
 //
 // Run from nfs-th232-analysis-adne / 建议在 nfs-th232-analysis-adne 目录下运行:
 // root -l -b -q 'lsy_nfs/fit_nfs_deltaT_gamma_flash.C("out/nfs_histoExogam2_1.root")'
@@ -99,12 +99,17 @@ void fit_nfs_deltaT_gamma_flash(
   TKey *key = nullptr;
   while ((key = static_cast<TKey *>(nextKey()))) {
     TString name = key->GetName();
-    if (!name.EndsWith("_deltaT")) {
-      continue;
-    }
     Int_t clover = -1;
     Int_t crystal = -1;
-    if (sscanf(name.Data(), "nfs_clover%d_crystal%d_deltaT", &clover, &crystal) == 2) {
+    bool matched = false;
+    if (name.EndsWith("_time") &&
+        sscanf(name.Data(), "nfs_clover%d_crystal%d_time", &clover, &crystal) == 2) {
+      matched = true;
+    } else if (name.EndsWith("_deltaT") &&
+               sscanf(name.Data(), "nfs_clover%d_crystal%d_deltaT", &clover, &crystal) == 2) {
+      matched = true;
+    }
+    if (matched) {
       DeltaTHistInfo info;
       info.name = name;
       info.clover = clover;
@@ -118,6 +123,11 @@ void fit_nfs_deltaT_gamma_flash(
             [](const DeltaTHistInfo &a, const DeltaTHistInfo &b) {
               return a.detector < b.detector;
             });
+  if (histList.empty()) {
+    std::cerr << "No crystal time histograms found / 未找到 crystal 时间直方图. "
+              << "Expected names like nfs_clover2_crystal0_time "
+              << "or legacy nfs_clover2_crystal0_deltaT." << std::endl;
+  }
 
   TString outPath = BuildOutputPath(inputFile, outputFile);
   TString textPath = BuildTextOutputPath(outPath);
@@ -136,8 +146,8 @@ void fit_nfs_deltaT_gamma_flash(
     fin->Close();
     return;
   }
-  textOut << "# NFS EXOGAM gamma-flash fit table\n";
-  textOut << "# NFS EXOGAM gamma flash 拟合结果表\n";
+  textOut << "# NFS EXOGAM gamma-flash fit table for Time/DeltaT histograms\n";
+  textOut << "# NFS EXOGAM Time/DeltaT gamma flash 拟合结果表\n";
   textOut << "# Columns: clover crystal detector gammaMean_ns gammaFwhm_ns gammaSigma_ns fitStatus entries\n";
   textOut << std::fixed << std::setprecision(6);
 
@@ -158,7 +168,7 @@ void fit_nfs_deltaT_gamma_flash(
   gFwhm->SetTitle("Gamma-flash FWHM;Detector number (clover*4+crystal);FWHM (ns)");
 
   TTree *tree = new TTree("nfs_deltaT_gamma_flash_fit_table",
-                          "Gamma-flash fit results for NFS DeltaT spectra");
+                          "Gamma-flash fit results for NFS Time/DeltaT spectra");
   Int_t clover = -1;
   Int_t crystal = -1;
   Int_t detector = -1;
@@ -311,7 +321,7 @@ void fit_nfs_deltaT_gamma_flash(
 
     TH1 *hDraw = dynamic_cast<TH1 *>(h->Clone(Form("%s_fit_input", histName.Data())));
     hDraw->SetDirectory(nullptr);
-    hDraw->SetTitle(Form("%s;DeltaT (ns);Counts", histName.Data()));
+    hDraw->SetTitle(Form("%s;Time (ns);Counts", histName.Data()));
     hDraw->GetXaxis()->SetRangeUser(fitLow, std::min(xMax, latePeakPosition + plotPaddingAfterLatePeak));
     hDraw->SetLineColor(kBlack);
     hDraw->SetMarkerStyle(1);
@@ -349,7 +359,7 @@ void fit_nfs_deltaT_gamma_flash(
     TLegend *legend = new TLegend(0.58, 0.66, 0.88, 0.88);
     legend->SetBorderSize(0);
     legend->SetFillStyle(0);
-    legend->AddEntry(hDraw, "DeltaT spectrum", "l");
+    legend->AddEntry(hDraw, "Time spectrum", "l");
     legend->AddEntry(drawGamma, "Gamma flash Gaussian", "l");
     legend->AddEntry(drawLate, "Late peak leading Gaussian", "l");
     legend->AddEntry(drawTotal, "Total fit", "l");
