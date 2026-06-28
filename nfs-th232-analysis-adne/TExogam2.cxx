@@ -37,6 +37,9 @@ TExogam2::TExogam2(bool bspec)
    closed=false;
    fNfsCrystalDeltaTEnergy=NULL;
    fNfsAllCrystalTime=NULL;
+   fNfsCrystalCrossTalk=NULL;
+   fNfsCrystalBgoEfficiency=NULL;
+   fNfsCrystalCsiEfficiency=NULL;
    for(Int_t i=0;i<16*4;i++){
       fNfsCrystalDeltaT[i]=NULL;
       fNfsCrystalEnergy[i]=NULL;
@@ -286,6 +289,27 @@ bool TExogam2::NfsSpectraConstructor(){
 	fNfsAllCrystalTime = new TH1F("nfs_all_crystal_time","NFS all crystal Time;Time (ns);Counts",1600,0,1600);
 	HListNfsExogam2.Add(fNfsAllCrystalTime);
 
+	// EN: Cross talk is event-level: if two or more crystals have positive gamma energy, fill all off-diagonal pairs.
+	// CN: 串扰图是 event 级定义：同一 event 中两个以上 crystal 有正 gamma 能量时，填所有非对角两两组合。
+	fNfsCrystalCrossTalk = new TH2F("nfs_crystal_cross_talk","NFS crystal cross talk;Crystal (clover-crystal);Crystal (clover-crystal)",64,-0.5,63.5,64,-0.5,63.5);
+	HListNfsExogam2.Add(fNfsCrystalCrossTalk);
+
+	// EN: TProfile bins store mean(0/1), so the bin content is the detector fire efficiency.
+	// CN: TProfile 每个 bin 保存 0/1 平均值，因此 bin content 就是 detector fire 效率。
+	fNfsCrystalBgoEfficiency = new TProfile("nfs_crystal_bgo_efficiency","NFS crystal BGO efficiency;Crystal (clover-crystal);BGO fire efficiency",64,-0.5,63.5,0.0,1.0);
+	HListNfsExogam2.Add(fNfsCrystalBgoEfficiency);
+
+	fNfsCrystalCsiEfficiency = new TProfile("nfs_crystal_csi_efficiency","NFS crystal CSI efficiency;Crystal (clover-crystal);CSI fire efficiency",64,-0.5,63.5,0.0,1.0);
+	HListNfsExogam2.Add(fNfsCrystalCsiEfficiency);
+
+	for(Int_t id=0; id<16*4; id++){
+		TString label = TString::Format("%d-%d", id/4, id%4);
+		fNfsCrystalCrossTalk->GetXaxis()->SetBinLabel(id+1,label.Data());
+		fNfsCrystalCrossTalk->GetYaxis()->SetBinLabel(id+1,label.Data());
+		fNfsCrystalBgoEfficiency->GetXaxis()->SetBinLabel(id+1,label.Data());
+		fNfsCrystalCsiEfficiency->GetXaxis()->SetBinLabel(id+1,label.Data());
+	}
+
 	for(Int_t clo=0; clo<16; clo++){
 		if(CloverPresent[clo]==false)continue;
 		for(Int_t cri=0; cri<4; cri++){
@@ -323,6 +347,31 @@ void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t tim
 	if(fNfsAllCrystalTime)fNfsAllCrystalTime->Fill(timeNs);
 	if(fNfsCrystalDeltaT[mapFinger])fNfsCrystalDeltaT[mapFinger]->Fill(timeNs);
 	if(fNfsCrystalEnergy[mapFinger])fNfsCrystalEnergy[mapFinger]->Fill(energy);
+}
+
+void TExogam2::FillNfsCrystalEventSpectra(Bool_t *crystalFired, Bool_t *bgoFired, Bool_t *csiFired){
+	// EN: Called once per event after raw positive-energy crystal fires have been collected.
+	// CN: 每个 event 调用一次；输入已经是正能量 raw crystal fire 的 event 级标记。
+	if(!NfsSpec)return;
+	Int_t firedIds[16*4];
+	Int_t firedMult=0;
+	for(Int_t id=0; id<16*4; id++){
+		if(!crystalFired[id])continue;
+		firedIds[firedMult++]=id;
+		// EN: TProfile stores the mean of 0/1 values, i.e. the BGO/CSI fire efficiency.
+		// CN: TProfile 保存 0/1 的平均值，也就是 BGO/CSI fire 效率。
+		// EN: Denominator is this crystal fired; numerator is BGO/CSI > 0 in the same stored event entry.
+		// CN: 分母是该 crystal fire；分子是同一存储条目中 BGO/CSI > 0。
+		if(fNfsCrystalBgoEfficiency)fNfsCrystalBgoEfficiency->Fill(id,bgoFired[id] ? 1.0 : 0.0);
+		if(fNfsCrystalCsiEfficiency)fNfsCrystalCsiEfficiency->Fill(id,csiFired[id] ? 1.0 : 0.0);
+	}
+	if(firedMult<2 || !fNfsCrystalCrossTalk)return;
+	for(Int_t i=0; i<firedMult; i++){
+		for(Int_t j=i+1; j<firedMult; j++){
+			fNfsCrystalCrossTalk->Fill(firedIds[i],firedIds[j]);
+			fNfsCrystalCrossTalk->Fill(firedIds[j],firedIds[i]);
+		}
+	}
 }
 
 void TExogam2::FillNfsCloverAddbackSpectra(Int_t clo, Float_t energy, Float_t bgo, Float_t csi){
@@ -1510,6 +1559,7 @@ char cristal[5]={'A','B','C','D','\0'};
 float EnergyAddTQ[16],EnergyAddTC[16],EnergyAdd[16],mulCrysPerClover[16],EnergyAddTQDC[16];
 float E877CloverE[16],E877CloverT[16],E877MaxCrystalE[16],E877CloverBGO[16],E877CloverCSI[16];
 bool E877CloverFired[16];
+Bool_t NfsCrystalFired[16*4],NfsCrystalBgoFired[16*4],NfsCrystalCsiFired[16*4];
 float Theta_Gamma, Phi_Gamma, X_Gamma, Y_Gamma, Z_Gamma;
 float X_Gamma_Core, Y_Gamma_Core, Z_Gamma_Core;
 bool IsPrompt[16][4];
@@ -1585,6 +1635,11 @@ SumCalorimeter=0;
 		E877CloverE[c]=E877CloverT[c]=E877MaxCrystalE[c]=E877CloverBGO[c]=E877CloverCSI[c]=0.;
 		E877CloverFired[c]=false;
 	}
+	for(Int_t id=0; id<16*4; id++){
+		NfsCrystalFired[id]=false;
+		NfsCrystalBgoFired[id]=false;
+		NfsCrystalCsiFired[id]=false;
+	}
 
 	cloverMul=0;
 	for (UShort_t i = 0; i < fExogam2Data->GetECCEMult(); i++) {
@@ -1601,7 +1656,9 @@ SumCalorimeter=0;
 		if(mulG[clo][cri]==4)mulECCG[clo][cri]++;
 		if(mulGnrj[clo][cri]>0)mulECCGnrj[clo][cri]++;
 		// EN: NFS E877 addback uses raw crystal fires grouped by clover, before prompt/AC cuts.
+		//     The threshold here is only energy > 0, to reject empty/zero gamma deposits.
 		// CN: NFS E877 合并直接把 raw crystal fire 按 clover 分组，不套 prompt/AC 判断。
+		//     这里唯一能量阈值是 energy > 0，用来排除空/零能量 gamma 沉积。
 		if(fExogam2Data->GetECCEEnergy(i)>0){
 			Float_t e877Energy=fExogam2Data->GetECCEEnergy(i);
 			Float_t e877Time=0.;
@@ -1614,8 +1671,21 @@ SumCalorimeter=0;
 				E877CloverT[clo]=e877Time;
 			}
 			if(i<fExogam2Data->GetESSTQMult()){
+				// EN: BGO/CSI values are kept as stored; later veto/efficiency uses >0 as fire condition.
+				// CN: BGO/CSI 保留原始存储值；后续 veto/效率统计用 >0 作为 fire 条件。
 				E877CloverBGO[clo]+=fExogam2Data->GetESSTQBGO(i);
 				E877CloverCSI[clo]+=fExogam2Data->GetESSTQCSI(i);
+			}
+
+			Int_t nfsCrystalId=clo*4+cri;
+			if(nfsCrystalId>=0 && nfsCrystalId<16*4){
+				// EN: Event-level crystal fire for cross-talk and BGO/CSI efficiency, with zero-energy fires skipped.
+				// CN: 用于串扰和 BGO/CSI 效率的 event 级 crystal fire，跳过零能量 fire。
+				NfsCrystalFired[nfsCrystalId]=true;
+				if(i<fExogam2Data->GetESSTQMult()){
+					if(fExogam2Data->GetESSTQBGO(i)>0)NfsCrystalBgoFired[nfsCrystalId]=true;
+					if(fExogam2Data->GetESSTQCSI(i)>0)NfsCrystalCsiFired[nfsCrystalId]=true;
+				}
 			}
 		}
 		//cerr<<mulGnrj[clo][cri]<<endl;
@@ -1679,6 +1749,8 @@ SumCalorimeter=0;
 		//---------------------------------------------------------
 
    	}
+
+	FillNfsCrystalEventSpectra(NfsCrystalFired,NfsCrystalBgoFired,NfsCrystalCsiFired);
 
 	// EN: Store and histogram the raw clover addback requested for the NFS E877-style tree.
 	// CN: 保存并绘制 NFS E877 格式的 raw clover 合并结果。

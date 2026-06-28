@@ -225,6 +225,8 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
     return;
   }
 
+  // EN: Reject unphysically early clover fires by assuming the fastest relevant neutron is 50 MeV.
+  // CN: 认为最高相关中子能量为 50 MeV，用它对应的最短飞行时间去掉过早 fire。
   const double highestEnergyMeV = 50.0;
   const double tMinNs = EnergyMeVToToFNs(highestEnergyMeV, nfsDistanceMeter);
   const double sigmaTimeNs = timeFwhmNs / 2.355;
@@ -254,6 +256,13 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
     bins.push_back(bin);
     lowEnergy = highEnergy;
   }
+
+  // EN: Filled only after the same fission-candidate cuts as the 1D spectra and matrices.
+  // CN: 只在通过与一维谱/符合矩阵相同的裂变候选 cut 后填充。
+  TH2F *gammaEnergyVsTime = new TH2F(
+      "Mult3GammaEnergyVsTime",
+      "Mult3 fission candidates;Clover addback gamma energy (keV);Clover Time (ns)",
+      4096, 0.0, 4096.0, 1600, 0.0, 1600.0);
 
   TChain chain("TreeMaster");
   for (const auto &input : SplitCsv(inputFiles)) {
@@ -318,17 +327,23 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
     }
 
     std::vector<float> selectedEnergies;
+    std::vector<float> selectedTimes;
     selectedEnergies.reserve(n);
+    selectedTimes.reserve(n);
     double eventTimeNs = std::numeric_limits<double>::infinity();
 
     for (std::size_t i = 0; i < n; ++i) {
       const float energy = energies[i];
       const float time = times[i];
+      // EN: Gamma zero-energy deposits and invalid/nonpositive times are not physical gamma fires.
+      // CN: gamma 能量为 0 或时间非正的条目不作为有效 gamma fire。
       if (energy <= 0.0f || time <= 0.0f) continue;
       if (useBgoCsiVeto) {
         const std::size_t nveto = std::min(static_cast<std::size_t>(bgo->GetSize()),
                                            static_cast<std::size_t>(csi->GetSize()));
         if (i >= nveto) continue;
+        // EN: Veto threshold is any positive BGO/CSI signal in the stored E877 clover branch.
+        // CN: veto 阈值定义为 E877 clover 分支里 BGO/CSI 任意正值响应。
         if ((*bgo)[i] > 0.0f || (*csi)[i] > 0.0f) continue;
       }
       // EN: Remove clover fires earlier than the physical high-energy time cut.
@@ -336,14 +351,19 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
       if (time < tCutNs) continue;
 
       selectedEnergies.push_back(energy);
+      selectedTimes.push_back(time);
       if (time < eventTimeNs) eventTimeNs = time;
     }
 
+    // EN: Fission-candidate definition after all per-fire cuts: at least 3 clover fires remain.
+    // CN: 所有单个 fire cut 之后，剩余 clover fire 数 >=3 才作为裂变候选事件。
     if (selectedEnergies.size() < 3) {
       skippedMultiplicity++;
       continue;
     }
 
+    // EN: Event time is the earliest accepted clover time; binning is therefore event-level.
+    // CN: 事件时间取通过 cut 的 clover fire 中最早时间，因此能量/时间分 bin 是 event 级。
     const int binIndex = FindEnergyTimeBin(bins, eventTimeNs);
     if (binIndex < 0) {
       skippedNoBin++;
@@ -354,6 +374,11 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
     bins[binIndex].selectedEvents++;
     for (float energy : selectedEnergies) {
       bins[binIndex].spectrum->Fill(energy);
+    }
+    for (std::size_t i = 0; i < selectedEnergies.size(); ++i) {
+      // EN: Same fission-candidate cuts as the spectra; fill one point per accepted clover fire.
+      // CN: 使用与裂变候选谱相同的判选条件；每个通过 cut 的 clover fire 填一次。
+      gammaEnergyVsTime->Fill(selectedEnergies[i], selectedTimes[i]);
     }
     for (std::size_t i = 0; i < selectedEnergies.size(); ++i) {
       for (std::size_t j = i + 1; j < selectedEnergies.size(); ++j) {
@@ -396,6 +421,9 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
   summary.SetBinContent(4, skippedNoBin);
   summary.SetBinContent(5, skippedMalformed);
   summary.Write();
+
+  gammaEnergyVsTime->Write();
+  WriteCanvasForMatrix(histDir, gammaEnergyVsTime, "Selected mult3 fission candidates");
 
   for (auto &bin : bins) {
     bin.spectrum->Write();

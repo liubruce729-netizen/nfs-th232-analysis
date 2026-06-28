@@ -26,8 +26,8 @@ out/nfs_histoExogam2_1_peak_1440_1470.root
 
 ## DeltaT Gamma-Flash Fit / DeltaT Gamma Flash 拟合
 
-自动遍历输入 ROOT 文件中的 `nfs_clover*_crystal*_deltaT` 直方图。  
-The macro automatically scans `nfs_clover*_crystal*_deltaT` histograms in the input ROOT file.
+自动遍历输入 ROOT 文件中的 `nfs_clover*_crystal*_time` 直方图；同时兼容旧文件中的 `nfs_clover*_crystal*_deltaT` 命名。
+The macro automatically scans `nfs_clover*_crystal*_time` histograms in the input ROOT file, with legacy `nfs_clover*_crystal*_deltaT` compatibility.
 
 拟合模型：  
 Fit model:
@@ -87,8 +87,8 @@ detector = clover * 4 + crystal
 
 ## Fission Event Analysis / 裂变事件分析
 
-基于 ADNE 新产生的 `mult3_nfs_*.root` 文件，读取 `TreeMaster` 中的 `f_E877_Clover_*` 分支，对 veto 后且时间 cut 后仍满足 clover 多重度 `>=3` 的事件做分 bin gamma 谱和 gamma-gamma 符合矩阵。  
-The macro reads `f_E877_Clover_*` branches from ADNE `mult3_nfs_*.root` files and builds gamma spectra plus gamma-gamma matrices for events that still have clover multiplicity `>=3` after veto and time cuts.
+基于 ADNE 新产生的 `mult3_nfs_*.root` 文件，读取 `TreeMaster` 中的 `f_E877_Clover_*` 分支，对 veto 后且时间 cut 后仍满足 clover 多重度 `>=3` 的事件做分 bin gamma 谱、gamma-gamma 符合矩阵，以及 clover gamma 能量-时间二维图。
+The macro reads `f_E877_Clover_*` branches from ADNE `mult3_nfs_*.root` files and builds gamma spectra, gamma-gamma matrices, plus a clover gamma-energy versus Time map for events that still have clover multiplicity `>=3` after veto and time cuts.
 
 时间 cut 使用 ADNE 同源公式反推最高能中子飞行时间：  
 The time cut uses the same neutron TOF relation as ADNE:
@@ -136,7 +136,8 @@ Main output objects:
 
 - `Mult3GammaSpec_E*_MeV`: 1D gamma spectrum for each neutron-energy/time bin / 每个中子能量或时间 bin 的一维 gamma 谱
 - `Mult3GammaGammaMatrix_E*_MeV`: 2D gamma-gamma coincidence matrix / 每个 bin 的二维 gamma-gamma 符合矩阵
-- `c_Mult3GammaSpec_*`, `c_Mult3GammaGammaMatrix_*`: canvases with bin labels / 带 bin 标注的画布
+- `Mult3GammaEnergyVsTime`: selected clover addback gamma energy versus clover Time / 通过裂变候选 cut 的 clover addback gamma 能量-时间二维图
+- `c_Mult3GammaSpec_*`, `c_Mult3GammaGammaMatrix_*`, `c_Mult3GammaEnergyVsTime`: canvases with labels / 带标注的画布
 - `FissionEventAnaSummary`: processing summary / 处理统计摘要
 - `FissionEventAnaConfig`: input parameters / 输入参数记录
 
