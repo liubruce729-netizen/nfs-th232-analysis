@@ -1,0 +1,89 @@
+# Makefile for the ROOT test programs.
+# This Makefile shows nicely how to compile and link applications
+
+
+
+CLASSNAME   := GUser
+GUSERDIR     := ./
+ifeq ($(GRUDIR),)
+	GRUDIR       := /home/acqexp/GRU/GRUcurrent/
+endif
+VIGRUDIR     := $(GRUDIR)/vigru/
+GSOAPDIR     := $(GRUDIR)/gsoap/
+MFM_DIR      := $(GRUDIR)/../MFMlib/
+GRUFLAGS     := -I$(GRUDIR)/include/ -I$(MFM_DIR)/include/ -I$(MFM_DIR) -I$(VIGRUDIR)  -I$(GSOAPDIR)
+INCLIST      := General.h GAcq.h GDevice.h
+
+# Extensions des fichiers
+ObjSuf        = o
+SrcSuf        = C
+ExeSuf        =
+DllSuf        = so
+OutPutOpt     = -o 
+
+# Compilateur et options
+CXX	= g++ 
+LD 	= g++ 
+ifeq ($(COMPILER),CLANG)
+CXX	= clang++	
+LD 	= clang++	
+endif
+CXXFLAGS      = -O -Wall -fPIC
+LDFLAGS       = -O
+SOFLAGS       = -shared
+
+# Options de ROOT
+ROOTCFLAGS   := $(shell root-config --cflags) -I$(ROOTSYS)/xmlparser/inc -I$(ROOTSYS)/io/xmlparser/inc
+ROOTLIBS     := $(shell root-config --libs) -lHtml -lSpectrum
+ROOTGLIBS    := $(shell root-config --glibs)
+ROOTVERSION  := $(shell root-config --version)
+
+CXXFLAGS     += $(ROOTCFLAGS) $(GRUFLAGS) 
+LIBS          = $(ROOTLIBS)  $(SYSLIBS)
+GLIBS         = $(ROOTGLIBS) $(SYSLIBS)
+
+#------------------------------------------------------------------------------
+SHARELIB      = $(CLASSNAME)_C.so 
+#------------------------------------------------------------------------------
+all:  $(SHARELIB)
+
+$(CLASSNAME)_C.so: $(CLASSNAME).o   $(CLASSNAME)Dict.o	
+	$(LD) $(SOFLAGS) $^ $(OutPutOpt) $@
+
+ROOTVERSION2 = $(findstring 5.,$(ROOTVERSION))
+
+ifeq ("$(ROOTVERSION2)","5.")
+$(CLASSNAME)Dict.C:	$(CLASSNAME).h
+			@echo "Generating dictionary with ROOT 5 $@..."
+			rootcint -f $@ -c -p $(GRUFLAGS) $(INCLIST) $^ $(CLASSNAME)_linkdef.h
+else
+$(CLASSNAME)Dict.C:	$(CLASSNAME).h
+			@echo "Generating dictionary with ROOT 6 $@..."
+			rootcint -f $@ -c -p -rml $(CLASSNAME)_C.so -rmf $(CLASSNAME)_C.rootmap $(CXXFLAGS) $(INCLIST) $^ $(CLASSNAME)_linkdef.h
+			rootcint -f $@ -c -p $(CXXFLAGS) $(INCLIST) $^ $(CLASSNAME)_linkdef.h
+endif
+
+
+clean:
+	@echo "Clean :  rm -f core  *.o *Dict* *.so"
+	@rm -f core  *.o *Dict*.* *.so
+
+
+.SUFFIXES: .$(SrcSuf)
+
+###
+
+.$(SrcSuf).$(ObjSuf):
+	$(CXX) $(CXXFLAGS) -c $<
+
+# dependances
+$(CLASSNAME).o:	$(CLASSNAME).C	 $(CLASSNAME).h
+
+
+info:    
+		@echo "--------GRU_LIB-O----------------"
+		@echo $(GRUDIR)
+		@echo "--------LD_LIBRARY_PATH----------------"
+		@echo $(LD_LIBRARY_PATH)
+		
+

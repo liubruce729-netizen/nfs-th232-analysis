@@ -1,0 +1,354 @@
+// Author: $Author: legeard $
+// Part of GRU
+/////////////////////////////////////////////////////////////////////////////
+// GNetClientFDT : Client of a Ganil Acquisition fo  Narval data flow.
+//                    This client get buffer Narval from network by a standard TCPIP connection
+// 					  The 4 first bytes of Narval buffer contain size Narval buffer
+//					  sommetime the 12 following containing the timestamps (and only with IN2P3 buffer)
+//					  after you can have either few IN2P3 buffer ( with fixed size) or few MFM frame (with variable size)
+//
+// ---------------------------------------------------------------------------
+// ***************************************************************************
+// *                                                                         *
+// *   This program is free software; you can redistribute it and/or modify  *
+// *   it under the terms of the GNU General Public License as published by  *
+// *   the Free Software Foundation; either version 2 of the License, or     *
+// *   (at your option) any later version.                                   *
+// *                                                                         *
+// ***************************************************************************/
+
+//#include <iomanip>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sstream>
+#include <unistd.h>
+//#include <string.h>    /* for memset() */
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <fdt.h>
+#include <errno.h>
+#include <TObject.h>
+#include <TH1.h>
+#include <TH2.h>
+#include <TFile.h>
+#include <TROOT.h>
+
+//include des fichiers header existants
+
+extern "C" {
+#include "GTtape_erreur.h"
+#include "GEN_TYPE.H"
+#include "STR_EVT.H"
+#include "ERR_GAN.H"
+#include "gan_acq_buf.h"
+}
+#include "GNetClientFDT.h"
+#include "General.h"
+#include "GEvent.h"
+#include "GBuffer.h"
+#include "GDevice.h"
+
+
+//differents DEFINE
+#define defaultPortn 	40192
+#define typeBufferSize 	8
+#define DUREE_ACQ	60
+
+ClassImp(GNetClientFDT);
+
+//_________________________________________________________________________________
+
+GNetClientFDT::GNetClientFDT(void) {
+	// Default constructor of GNetClientFDT
+	// it just initializes several variables from the current hostname
+
+	fTransmitter = NULL;
+	fType = GA_NET_FDT;
+	char tmp[MAX_CARACTERES];
+	fStatus = ACQ_OK;
+	fTempo = 60;
+	TString HostName = gSystem->Getenv("ACQ_SERV_NAME");
+
+	if (HostName.CompareTo("") == 0) {
+		HostName = gSystem->HostName();
+	}
+	if (gethostname(tmp, MAX_CARACTERES) == 0) {
+		GNetClientFDTInit(HostName.Data());
+	} else {
+		fStatus = -1;
+		fError.TreatError(2, fStatus, "occured during GNetClientFDT creation");
+	}
+}
+
+//_________________________________________________________________________________
+
+GNetClientFDT::GNetClientFDT(const char *host) :
+	GDevice(host) {
+	// Constructor of GNetClientFDT
+	// it just initializes several variables from the parameter hostname
+	fType = GA_NET_FDT;
+	fTransmitter = NULL;
+	GNetClientFDTInit(host);
+
+}
+
+//_________________________________________________________________________________
+
+GNetClientFDT::~GNetClientFDT() {
+	//Destroyer of GNetClientFDT
+
+	//ferme la connection avec le serveur si celle-ci est toujours valable
+	Close();
+
+	//if ( fPile_Buffer )    delete fPile_Buffer;  // PB to solve
+	if (fBuffer_Envoye) {
+		delete[] fBuffer_Envoye;
+		fBuffer_Envoye = NULL;
+	}
+	if (fBuffer_Retour) {
+		delete[] fBuffer_Retour;
+		fBuffer_Retour = NULL;
+	}
+	if (fZoneData_char) {
+		delete[] fZoneData_char;
+		fZoneData_char = NULL;
+	}
+
+	if (fVerbose > 5)
+		fError.TreatError(0, 0, "Object 'GNetClientFDT' deleted ");
+}
+
+//_________________________________________________________________________________
+
+void GNetClientFDT::GNetClientFDTInit(const char* host) {
+	// Initialization of several variables
+	// Method called only in construtors
+
+	TInetAddress Tip = gSystem->GetHostByName(host);
+	TString IpNumber = Tip.GetHostAddress();
+	SetDevice(IpNumber.Data());
+	SetPort(defaultPortn);
+	fTransmitter = new fdtTransmitter();
+	fBufferMFM = new GBufferMFM();
+	fTransmitter->setTimeout(0); // no timeout
+}
+
+//_________________________________________________________________________________
+void GNetClientFDT::Open(char* mod) {
+	//The enter parameter 'mod' is inefficient GDopen("anything") is equivalent to  GDopen ()
+	Open();
+}
+//_________________________________________________________________________________
+void GNetClientFDT::Open(char mod) {
+	//Log on to the distant host which name is a parameter
+
+	TString tempos;
+
+	if (fIsOpen)
+		return;
+	gettimeofday(&fMt_permitclose, &fTz);
+	string temposs = fName;
+
+	int err = fTransmitter->connect(temposs, GetPort());
+	if (err != OK) {
+
+		switch (err) {
+		case R_TCP_DNS:
+			tempos = "(R_TCP_DNS) in  GNetClientFDT::Open ";
+			break;
+		case R_TCP_SOCKET:
+			tempos = "(R_TCP_SOCKET) in  GNetClientFDT::Open ";
+			break;
+		case R_TCP_BIND:
+			tempos = "(R_TCP_BIND) in  GNetClientFDT::Open ";
+			break;
+		case R_TCP_CONNECT:
+			tempos = "(R_TCP_CONNECT) in  GNetClientFDT::Open ";
+			break;
+		default:
+			tempos = "(UNKNOWN) in  GNetClientFDT::Open ";
+			break;
+		}
+
+		fError.TreatError(2, 0, tempos);
+	}
+
+	fIsOpen = true;
+}
+
+//______________________________________________________________________________
+
+void GNetClientFDT::Close() {
+	MyClose();
+}
+//______________________________________________________________________________
+
+void GNetClientFDT::Close(Int_t tempo) {
+	MyClose(tempo);
+}
+//______________________________________________________________________________
+void GNetClientFDT::MyClose(Int_t tempo) {
+	//disconnection thanks to the following C function:
+	//	int  acq_tcp_remote_action  (int *socket, int *code_env, int *len_env, char *tab_env, int *code_ret, int *lmax_ret, int *len_ret, char *tab_ret)
+	//on ferme la connection avec le serveur si celle-ci est ouverte, car close peut tres bien avoir ete appelee par une methode precedemment
+
+	fStatus = ACQ_OK;
+
+	if (fIsOpen) {
+		gettimeofday(&fMt_reference, &fTz);
+		Int_t current_diff_time = (fMt_reference.tv_sec
+				- fMt_permitclose.tv_sec);
+
+		if (current_diff_time < tempo)
+			return;
+		int err = fTransmitter->sendDISCONNECT();
+
+		if (err != OK) {
+			char msg[MAX_CARACTERES];
+
+			fError.TreatError(
+					2,
+					0,
+					"Occured during the connection attempt  (Automatically closing socket) ",
+					msg);
+		} else {
+			if (fVerbose)
+				fError.Infos("Disconnection :OK ");
+		}
+		fIsOpen = false;
+	}
+}
+
+//_________________________________________________________________________________
+
+void GNetClientFDT::SetDevice(const char* _host) {
+	//close the current connection with the previous server before changing the server name
+
+	GDevice::SetDevice(_host);
+	if (fStatus != ACQ_OK) {
+		fError.TreatError(2, fStatus, "Changing name not valid");
+		return;
+	}
+}
+//_________________________________________________________________________________
+void GNetClientFDT::SetPort(Int_t port) {
+	//close the current connection with the previous server before changing the server port
+
+	bool context = fIsOpen;
+	if (fIsOpen == true) {
+		Close(); // close the opened device before change file
+	}
+
+	GDevice::SetPort(port);
+	if (context) {
+		Open();
+	}
+
+}
+//_________________________________________________________________________________
+void GNetClientFDT::RazZone() {
+	for (int i = 0; i < fSizeZoneData; i++) {
+		fZoneData_char[i] = 0;
+	}
+}
+//_________________________________________________________________________________
+bool GNetClientFDT::GetBufferTransport(bool afficher) {
+	// Get  Buffer
+	// return true if data ok
+
+	// methode to define if necessary
+
+	return false;
+
+}
+//_________________________________________________________________________________
+
+void GNetClientFDT::GetBuffer(bool afficher) {
+	//Get data buffer
+	TString tempos;
+
+	return;
+}
+
+//_________________________________________________________________________________
+
+
+void GNetClientFDT::ReadBuffer() {
+	// Read a buffer
+	struct timeval mt_reference;
+	struct timeval mt_Timeout;
+	struct timezone tz;
+	Int_t time_out = 10;
+	gettimeofday(&mt_Timeout, &tz);
+	gettimeofday(&mt_reference, &tz);
+	fStatus = ACQ_OK;
+	while (true) {
+
+		GetBuffer(false);
+		gettimeofday(&mt_Timeout, &tz);
+
+		if (((mt_reference.tv_sec - mt_Timeout.tv_sec) > time_out)) {
+			fError.TreatError(1, 0, "Time out with no event");
+			break;
+		}
+		if (fStatus != ACQ_NOCURRCTRLBUF)
+			break;
+	};
+	if (fBuffer)
+		fBuffer->SetAttributs(true);
+}
+
+//_________________________________________________________________________________
+void GNetClientFDT::ReadBuffer(GBuffer& _Buffer) {
+	// Read a buffer ; it just calls the method 'GetEventBuffer' and copies it into the given buffer
+	while (true) {
+		GetBuffer(false);
+		if (fStatus != ACQ_NOCURRCTRLBUF)
+			break;
+	};
+	if (fBuffer) {
+		fBuffer->Equal(_Buffer);
+		fBuffer->SetAttributs();
+	}
+}
+//_________________________________________________________________________________
+void GNetClientFDT::SendFrame(MFMCommonFrame * frame) {
+	int size= frame->GetFrameSize();
+
+	if (size != 0)
+		size = frame->GetFrameSize();
+	SendBufferTransport((unsigned char*) frame->GetPointHeader(),size);
+}
+//_________________________________________________________________________________
+void GNetClientFDT::WriteBuffer(GBuffer * buff) {
+	int size= buff->GetBufSize();
+
+	if (size == 0)
+		size = buff->GetBufSizeFromBuffer();
+	if (size == 0){
+			fError.TreatError(1,0," GNetClientFDT::WriteBuffer buffer size is null");
+			return;
+	}
+	if (buff->GetBufDataChar()!=NULL){
+	SendBufferTransport((unsigned char*)(buff->GetBufDataChar()),size);
+
+	}else{
+		fError.TreatError(1,0," GNetClientFDT::WriteBuffer buffer pointer is null");
+					return;
+	}
+}
+//_________________________________________________________________________________
+bool GNetClientFDT::SendBufferTransport(unsigned char* buff, int size) {
+
+	int err = fTransmitter->send(buff, size);
+	if (err == OK) {
+
+		err = fTransmitter->sendDISCONNECT();
+	}
+	if (err != OK) {
+		cout << "transmission error " << err << endl;
+	}
+	return true;
+}
+//_________________________________________________________________________________

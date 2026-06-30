@@ -1,0 +1,101 @@
+all: makedir clean gsoap  GruSoapServer GRUC libGruSoap  endmessage
+
+limited: GruSoapServer GruSoapClient libGruSoap
+
+#------------------------------------------
+INSTALLDIRdef := ./
+ifeq ($(INSTALLDIR),)
+INSTALLDIR = $(INSTALLDIRdef)
+endif
+EXEDIR := ./bin/
+LIBDIR := ./lib
+INCDIR := -I ./
+
+ifeq ($(GSOAPLIBDIR),)
+GSOAPLIB 	:= -lgsoap++
+GSOAPLIBDIREXE 	:=
+else
+GSOAPLIB 	:= $(GSOAPLIBDIR)gsoap/libgsoap++.a
+GSOAPLIBDIREXE	:= $(GSOAPLIBDIR)/gsoap/bin/linux386/
+INCDIR +=       -I $(GSOAPLIBDIR)/gsoap/
+endif
+
+CXX	= g++ 
+LD 	= g++ 
+ifeq ($(COMPILER),CLANG)
+CXX	= clang++	
+LD 	= clang++	
+endif
+FLAGS  := -O2 -fPIC -g -DWITH_NOANAMESPACES 
+
+
+
+makedir:
+	mkdir -p $(EXEDIR)
+	mkdir -p $(LIBDIR)
+
+Utilities.o : Utilities.cpp Utilities.cpp
+	$(CXX)  $(FLAGS) $(INCDIR) -c Utilities.cpp -o Utilities.o 
+
+GSoapErrorCode.o : GSoapErrorCode.cpp GSoapErrorCode.h
+	$(CXX)  $(FLAGS) $(INCDIR) -c GSoapErrorCode.cpp -o GSoapErrorCode.o
+	
+GruSoapC.o : GruSoapC.cpp GruSoapH.h
+	$(CXX)  $(FLAGS) $(INCDIR) -c GruSoapC.cpp -o GruSoapC.o
+
+GruSoapServer.o : GruSoapServer.cpp GruSoapH.h
+	$(CXX)  $(FLAGS) $(INCDIR) -c GruSoapServer.cpp -o GruSoapServer.o
+	
+GruSoapServerLib.o : GruSoapServerLib.cpp GruSoapH.h
+	$(CXX)  $(FLAGS) $(INCDIR) -c GruSoapServerLib.cpp -o GruSoapServerLib.o
+
+Main.o : Main.cpp Main.h
+	$(CXX) $(FLAGS) $(INCDIR) -c Main.cpp -o Main.o
+	
+GruSoapMyServer.o : GruSoapMyServer.cpp GruSoapH.h GruSoap.nsmap GruSoapMyServer.h
+	$(CXX) $(FLAGS) $(INCDIR) -c GruSoapMyServer.cpp -o GruSoapMyServer.o
+
+GruSoapMyClient.o :GruSoapMyClient.cpp  
+	$(CXX)  $(FLAGS) $(INCDIR) -c GruSoapMyClient.cpp -o GruSoapMyClient.o
+
+GruSoapClient.o :GruSoapClient.cpp  
+	$(CXX)  $(FLAGS) $(INCDIR) -c GruSoapClient.cpp -o GruSoapClient.o
+	
+GruInterfaceSoap.o :GruInterfaceSoap.cpp
+	$(CXX)  $(FLAGS) $(INCDIR) -c GruInterfaceSoap.cpp -o GruInterfaceSoap.o
+	
+GruSoapClientLib.o :GruSoapClientLib.cpp  
+	$(CXX)  $(FLAGS) $(INCDIR) -c GruSoapClientLib.cpp -o GruSoapClientLib.o 
+
+CSSoapClientLib.o : CSSoapClientLib.cpp  CSSoapClient.cpp CSSoapC.cpp 
+	$(CXX)  $(FLAGS) $(INCDIR) -c CSSoapClientLib.cpp -o CSSoapClientLib.o 
+	
+GRUC: GruSoapClient.o GruSoapMyClient.o GruSoapC.o GruInterfaceSoap.o GSoapErrorCode.o Utilities.o
+	$(LD)  $(FLAGS) $(INCDIR) -o $(EXEDIR)/GRUC GruSoapMyClient.o  GruSoapClient.o  GSoapErrorCode.o GruSoapC.o  $(GSOAPLIB) -lpthread
+
+libGruSoap : GruSoapC.o GruSoapServer.o  GruSoapClient.o GruInterfaceSoap.o GSoapErrorCode.o Utilities.o
+	$(AR)  -ru $(LIBDIR)/libGruSoap.a  GruSoapServer.o GruSoapC.o   GruSoapClient.o GruInterfaceSoap.o Utilities.o GSoapErrorCode.o
+
+GruSoapServer : GruSoapMyServer.o  GruSoapC.o GruSoapServer.o GSoapErrorCode.o Utilities.o Main.o
+	$(LD)  $(FLAGS) $(INCDIR) -o $(EXEDIR)/GruSoapServer GruSoapMyServer.o GruSoapServer.o GSoapErrorCode.o Utilities.o GruSoapC.o  Main.o $(GSOAPLIB) -lpthread
+	
+endmessage:
+	@echo " All is done"
+
+install:
+	@echo " Installation of package in $(INSTALLDIR)" 
+ifneq ($(INSTALLDIR),$(INSTALLDIRdef))
+	mkdir -p $(INSTALLDIR)/lib/
+	mkdir -p $(INSTALLDIR)/bin/
+	@cp $(EXEDIR)/* $(INSTALLDIR)/bin/
+	@cp $(LIBDIR)/* $(INSTALLDIR)/lib/
+else
+	@echo " Installation not done because INSTALLDIR = \"./\""
+endif		
+
+gsoap : 
+	$(GSOAPLIBDIREXE)soapcpp2 -x -L -n -pGruSoap libGruSoap_service.h
+
+#--------------------------------------------------
+clean :  
+		@rm -f *.o *.a *.xml  *Object.h *Proxy.h *.xsd *.wsdl GRUC GruSoapServer GruSoapServerLib.cpp   GruSoapH.h  GruSoapC.cpp    GruSoapStub.h GruSoapServer.cpp GruSoapClient.cpp GruSoapClientLib.cpp ./bin/* ./lib/*

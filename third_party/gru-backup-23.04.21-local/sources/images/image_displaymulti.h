@@ -1,0 +1,30 @@
+#ifndef __GIMAGE_DISPLAYMULTI__
+#define __GIMAGE_DISPLAYMULTI__
+static char *image_displaymulti[]={
+(char*)"21 21 4 1",
+(char*)"# c #000000",
+(char*)". c #c0c0c0",
+(char*)"b c #ff0000",
+(char*)"a c #ffffff",
+(char*)".....................",
+(char*)".#aaaaaaaa.#aaaaaaaa.",
+(char*)".##aaaaaaa.##aaaaaaa.",
+(char*)".#aaaaaaba.#aaaaaaaa.",
+(char*)".#aaaaabab.#abbaaaaa.",
+(char*)".#aaaabaab.#babbaaaa.",
+(char*)".##aabaaaa.##aabaaaa.",
+(char*)".#aabaaaaa.#aaaabaaa.",
+(char*)".#abaaaaaa.#aaaaabba.",
+(char*)".#baa#aaa#.#aa#aaa#a.",
+(char*)".#########.#########.",
+(char*)".....................",
+(char*)".#aaaaaaaa.#aaaaaaaa.",
+(char*)".##aaaaaaa.##aaabaaa.",
+(char*)".#aaaabaaa.#aaababaa.",
+(char*)".#aaaabaaa.#bbbaaaba.",
+(char*)".##aabbbaa.##aaaaaab.",
+(char*)".#aabaaaba.#aaaaaaaa.",
+(char*)".#aba#aab#.#aaa#aa#a.",
+(char*)".#########.#########.",
+(char*)"....................."};
+#endif

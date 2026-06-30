@@ -1,0 +1,115 @@
+
+// File : GNetServerFDT.h
+// Author: Luc Legeard
+//////////////////////////////////////////////////////////////////////////////
+//
+// Class GNetServerFDT
+//
+// This Class is to connect directly a electronic card
+//
+/////////////////////////////////////////////////////////////////////////////
+
+// ---------------------------------------------------------------------------
+// ***************************************************************************
+// *                                                                         *
+// *   This program is free software; you can redistribute it and/or modify  *
+// *   it under the terms of the GNU General Public License as published by  *
+// *   the Free Software Foundation; either version 2 of the License, or     *
+// *   (at your option) any later version.                                   *
+// *                                                                         *
+// ***************************************************************************/
+
+
+#ifndef __GNetServerFDT__
+#define __GNetServerFDT__
+
+#include "General.h"
+#include "GNetServer.h"
+#include "GAcq.h"
+#include <sstream>
+using std::ostream;
+
+#include <TObject.h>
+#include <TFile.h>
+#include <TString.h>
+#include <TNtuple.h>
+#include <TROOT.h>
+#include <TThread.h>
+#include <TMessage.h>
+#include <TSocket.h>
+#include <TServerSocket.h>
+#include <TMonitor.h>
+#include <TGListTree.h>
+#include <TList.h>
+#include <TH1.h>
+#include <TH2.h>
+#include <TThread.h>
+
+#include "TMayaHisto.h"
+#include "GBuffer.h"
+#include "GSpectra.h"
+#include "GNetServer.h"
+#include "fdtReceiver.h"
+#include "Tcp.h"
+#include "MFMCommonFrame.h"
+//_________________________________________________________________________________________
+class GNetServerFDT : public GNetServer {
+
+ private:
+
+ protected:
+   fdtReceiver* fReceiver;
+   int Timeout; // timeout in seconds, for connect and receive operations
+
+
+   int            fServerSocket;
+   TThread       *fThreadNet; //!
+   TString        fServerName; //
+   char           fNameThread[64]; //  Name of thread
+   bool           fStarting;  // informe about starting of server
+   bool           fQuiet; // inform if in few method message have to been screened
+   bool           fPrompt_wait;//
+   char *         fZoneData_char ;//! reception buffer
+   int            fSizeZoneData;//size of ZoneData
+   bool           fOpen;
+   MFMCommonFrame* fMFMpt;
+
+ public:
+
+  GNetServerFDT(int port);
+
+  ~GNetServerFDT();
+
+  virtual void InitCommand();
+  virtual Int_t StartServer(bool testport=false,bool autoportincrement=false);
+
+  virtual void StartThreadServer(bool quiet= false);
+  virtual void StopServer(bool quiet= false);
+  virtual void InitServer();
+
+  virtual void WaitCommandsFromClient();
+  virtual void TreatmentCommands();
+  virtual void Open(char mod ='r');
+  virtual void ReadBuffer();
+  virtual bool TestClient();
+ private:
+
+  static void  ThreadWaitCommandsFromOneClient(void* arg);
+
+ // virtual void GiveObject(int *localsock,TObject * obj);
+ // virtual void GiveWords(int *localsock,TString * words);
+//  virtual int  ReceiveWords(int *localsock,TString *recp);
+  virtual bool ReceiveConnections();
+
+  virtual void RazZone();
+
+ // virtual bool AnalyseSpecificCommandAndDo(char* command, TSocket*localsock) ;
+  virtual  long long  DecodMFMsize(unsigned char* buf);
+  virtual void GetBuffer(bool afficher);
+  virtual bool GetBufferTransport(bool afficher) ;
+  virtual void ErrorMessage(int err,const char * message) ;
+  ClassDef (GNetServerFDT ,1); // Nerwork ROOT Server to send spectra
+
+};
+
+#endif

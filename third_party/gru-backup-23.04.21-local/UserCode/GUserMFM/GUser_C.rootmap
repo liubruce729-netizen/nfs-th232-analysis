@@ -1,0 +1,4 @@
+[ GUser_C.so ]
+# List of selected classes
+class GUser
+header GUser.h

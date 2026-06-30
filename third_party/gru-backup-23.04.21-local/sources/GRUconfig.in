@@ -1,0 +1,8 @@
+
+#ifndef __GRUconfig__
+#define __GRUconfig__
+
+#cmakedefine BUILD_DATE "${BUILD_DATE}"
+#cmakedefine BUILD_TIME "${BUILD_TIME}"
+
+#endif

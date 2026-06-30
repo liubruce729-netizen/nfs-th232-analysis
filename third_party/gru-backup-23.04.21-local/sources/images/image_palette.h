@@ -1,0 +1,38 @@
+/* XPM */
+#ifndef __GIMAGE_PALETTE__
+#define __GIMAGE_PALETTE__
+static char *image_palette[]={
+(char*)"21 21 11 1",
+(char*)"i c #000080",
+(char*)"h c #0000ff",
+(char*)"f c #00ff00",
+(char*)"g c #00ffff",
+(char*)"e c #80ff80",
+(char*)". c #c0c0c0",
+(char*)"a c #ff0000",
+(char*)"b c #ff8000",
+(char*)"c c #ffff00",
+(char*)"d c #ffff80",
+(char*)"# c #ffffff",
+(char*)".....................",
+(char*)".###################.",
+(char*)".###################.",
+(char*)".##aaaaaaaaaaaaaaa##.",
+(char*)".##aaaaaaaaaaaaaaa##.",
+(char*)".##bbbbbbbbbbbbbbb##.",
+(char*)".##bbbbbbbbbbbbbbb##.",
+(char*)".##ccccccccccccccc##.",
+(char*)".##ddddddddddddddd##.",
+(char*)".##eeeeeeeeeeeeeee##.",
+(char*)".##eeeeeeeeeeeeeee##.",
+(char*)".##fffffffffffffff##.",
+(char*)".##fffffffffffffff##.",
+(char*)".##ggggggggggggggg##.",
+(char*)".##ggggggggggggggg##.",
+(char*)".##hhhhhhhhhhhhhhh##.",
+(char*)".##hhhhhhhhhhhhhhh##.",
+(char*)".##iiiiiiiiiiiiiii##.",
+(char*)".##iiiiiiiiiiiiiii##.",
+(char*)".###################.",
+(char*)"....................."};
+#endif

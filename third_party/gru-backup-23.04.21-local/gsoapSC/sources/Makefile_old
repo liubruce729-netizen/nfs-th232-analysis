@@ -1,0 +1,108 @@
+
+all:  makedir gsoap   SCClient  libSCSoap  libSCClientSoap endmessage SCSoapServer
+
+client :  gsoap SCC libSCClientSoap
+
+limited: SCSoapServer SCSoapClient libSCSoap
+
+#------------------------------------------
+INSTALLDIRdef := ./
+ifeq ($(INSTALLDIR),)
+INSTALLDIR = $(INSTALLDIRdef)
+endif
+EXEDIR := ./bin/
+LIBDIR := ./lib/
+INCDIR := -I ./
+
+ifeq ($(GSOAPLIBDIR),)
+GSOAPLIB 	:= -lgsoap++
+GSOAPLIBDIREXE 	:=
+else
+GSOAPLIB 	:= $(GSOAPLIBDIR)gsoap/libgsoap++.a
+GSOAPLIBDIREXE	:=$(GSOAPLIBDIR)/gsoap/bin/linux386/
+INCDIR +=       -I $(GSOAPLIBDIR)/gsoap/
+endif
+
+CXX	= g++ 
+LD 	= g++ 
+ifeq ($(COMPILER),CLANG)
+CXX	= clang++	
+LD 	= clang++	
+endif
+#FLAGS  := -O2 -fPIC -g -DWITH_NOANAMESPACES
+FLAGS  := -O2 -fPIC 
+
+
+makedir:
+	mkdir -p $(EXEDIR)
+	mkdir -p $(LIBDIR)
+	
+Utilities.o : Utilities.cpp Utilities.cpp
+	$(CXX)  $(FLAGS) $(INCDIR) -c Utilities.cpp -o Utilities.o 
+	
+SCSoapC.o : SCSoapC.cpp SCSoapH.h
+	$(CXX)  $(FLAGS) $(INCDIR) -c SCSoapC.cpp -o SCSoapC.o
+
+SCSoapServer.o : SCSoapServer.cpp SCSoapH.h
+	$(CXX)  $(FLAGS) $(INCDIR) -c SCSoapServer.cpp -o SCSoapServer.o
+
+SCSoapMyServer.o : SCSoapMyServer.cpp SCSoapH.h SCSoap.nsmap
+	$(CXX) $(FLAGS) $(INCDIR) -c SCSoapMyServer.cpp -o SCSoapMyServer.o
+
+SCSoapMyClient.o : SCSoapMyClient.cpp 
+	$(CXX)  $(FLAGS) $(INCDIR) -c SCSoapMyClient.cpp -o SCSoapMyClient.o
+
+SCSoapClient.o : SCSoapClient.cpp 
+	$(CXX)  $(FLAGS) $(INCDIR) -c SCSoapClient.cpp -o SCSoapClient.o
+
+SCSoapClientLib.o : SCSoapClientLib.cpp  SCSoapClient.cpp SCSoapC.cpp
+	$(CXX)  $(FLAGS) $(INCDIR) -c SCSoapClientLib.cpp -o SCSoapClientLib.o
+	
+SCInterfaceSoap.o : SCInterfaceSoap.cpp  SCInterfaceSoap.cpp
+	$(CXX)  $(FLAGS) $(INCDIR) -c SCInterfaceSoap.cpp -o SCInterfaceSoap.o
+	
+SCClient: SCSoapClient.o SCSoapMyClient.o SCSoapC.o Utilities.o
+	$(LD)  $(FLAGS) $(INCDIR) -o $(EXEDIR)/SCClient SCSoapMyClient.o Utilities.o SCSoapClient.o SCSoapC.o $(GSOAPLIB) -lpthread
+
+SCSoapServer: SCSoapMyServer.o SCSoapC.o SCSoapServer.o Utilities.o
+	$(LD)  $(FLAGS) $(INCDIR) -o $(EXEDIR)SCSoapServer  SCSoapMyServer.o SCSoapServer.o SCSoapC.o Utilities.o $(GSOAPLIB) -lpthread
+
+libSCSoap :  SCSoapC.o SCSoapServer.o  SCSoapClient.o SCInterfaceSoap.o Utilities.o
+	$(AR)  -ru $(LIBDIR)/libSCSoap.a   SCSoapServer.o SCSoapC.o   SCSoapClient.o SCInterfaceSoap.o Utilities.o
+	
+libSCClientSoap : SCSoapClientLib.o SCInterfaceSoap.o Utilities.o 
+	$(AR)  -ru  $(LIBDIR)/libSCClientSoap.a   SCSoapClientLib.o SCInterfaceSoap.o Utilities.o
+	
+SCtestSoap.o : SCtestSoap.c
+	$(CXX)  $(FLAGS) $(INCDIR) -c SCtestSoap.cpp -o SCtestSoap.o
+	
+libSCtestSoap :  SCtestSoap.o   SCInterfaceSoap.o
+	$(CXX)  -shared -fPIC -o $(LIBDIR)/libSCtestSoap.so   SCtestSoap.o SCInterfaceSoap.o
+		
+endmessage:
+	@echo " All is done"
+	
+install: 
+	@echo " Installation of package in "
+	@echo $(INSTALLDIR)
+	
+ifeq ($(INSTALLDIR),$(INSTALLDIRdef))
+	@echo " Installation not done because INSTALLDIR = \"./\""
+else
+	mkdir -p $(INSTALLDIR)/lib/
+	mkdir -p $(INSTALLDIR)/bin/
+	@cp $(EXEDIR)/* $(INSTALLDIR)/bin/
+	@cp $(LIBDIR)/* $(INSTALLDIR)/lib/
+endif	
+
+gsoap :	
+#	$(GSOAPLIBDIREXE)wsdl2h -c -o libSCSoap_service.h SCSoap.wsdl
+	$(GSOAPLIBDIREXE)soapcpp2 -n -pSCSoap sc_soap_services.hh
+	
+info :	
+	@echo "-------------------GSOAPLIB-----------------------------"
+	@echo $(GSOAPLIB)
+	@echo $(GSOAPLIBDIREXE)
+#--------------------------------------------------
+clean :  
+		@rm -f *.o *.a *.xml  *Object.h *Proxy.h  SCClient SCSoapServer SCSoapServerLib.cpp SCSoapH.h  SCSoapC.cpp libSCSoap_service.h  SCSoapStub.h SCSoapServer.cpp SCSoapClient.cpp SCSoapClient.h SCSoapClientLib.cpp./bin/* ./lib/* sc.wsdl SCSoap.nsmap sc.xsd SCSoapClientLib.cpp SCSoap.wsdl SCSoapscProxy.cpp SCSoapscService.cpp SCSoapscService.h soapClientLib.cpp soapServer.cpp soapServerLib.cpp

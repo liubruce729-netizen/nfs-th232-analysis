@@ -1,0 +1,22 @@
+Hi
+
+What is GUser and How to use it
+
+GUser is a derived c++ class from GAcq. GUser is available to user wanting to introduce specific C++ code to analyse Ganil data.
+
+GUser is composed of 6 empty methods ready to be fill by user.
+
+InitUser() is called  by SetUserMode()
+InitUserRun()is called by DoRun  
+User() is called for each new event
+EndUserRun() is call either DoRun is finished either on a Stop 
+EndUser() is called by EndUser
+
+and  InitTTreeUser() is used to define branch in case TTree output is validated
+
+To compile GUser and load it
+-either you do a "make" and do  a "gROOT->ProcessLine(".L ./GUser_C.so");" in GRU to load  it
+-either do in GRU
+  "gROOT->ProcessLine(".include /home/acqexp/GRU/GRUcurrent/include");
+
+

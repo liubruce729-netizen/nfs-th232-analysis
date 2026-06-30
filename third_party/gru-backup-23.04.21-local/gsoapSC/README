@@ -1,0 +1,18 @@
+
+-------------------------------------------------------------------------------------------
+Informations :
+
+Library soap to comunicate with Slow Control of numexo2
+( to get trace in oscilloscope mode for example)
+
+-------------------------------------------------------------------------------------------
+To build (options are in brackets) :
+
+cmake -DCMAKE_INSTALL_PREFIX=../ ../sources/ [-DDEBUG=YES] 
+make
+make install
+
+add option "-DDEBUG=YES"  to activate debug compilation mode 
+
+-------------------------------------------------------------------------------------------
+

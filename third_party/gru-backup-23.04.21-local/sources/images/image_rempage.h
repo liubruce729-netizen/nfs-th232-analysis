@@ -1,0 +1,31 @@
+#ifndef __GIMAGE_REMPAGE__
+#define __GIMAGE_REMPAGE__
+static char *image_rempage[]={
+(char*)"21 21 5 1",
+(char*)"b c #000000",
+(char*)"c c #0000ff",
+(char*)". c #c0c0c0",
+(char*)"# c #ff0000",
+(char*)"a c #ffffff",
+(char*)"..................###",
+(char*)".###aaaaaaaaaaaaa####",
+(char*)".####bbbbaaaaaaa#####",
+(char*)".#####aaabaaaaa#####.",
+(char*)".a#####babaaaa#####a.",
+(char*)".ab#####abaaa#####aa.",
+(char*)".aba#####baa#####aaa.",
+(char*)".abbb#####b#####bbba.",
+(char*)".abaaa#########aaaba.",
+(char*)".abaaac#######aaaaba.",
+(char*)".abaaacc#####aaaaaba.",
+(char*)".abaaac#######aaaaba.",
+(char*)".abaaa#########aaaba.",
+(char*)".abaa#####c#####aaba.",
+(char*)".aba#####cca#####aba.",
+(char*)".ab#####aaaaa#####ba.",
+(char*)".a#####caaaaaa#####a.",
+(char*)".#####ccaaaaaaa#####.",
+(char*)".####bbbbbbbbbbb####.",
+(char*)".###aaaaaaaaaaaaa###.",
+(char*)"....................."};
+#endif

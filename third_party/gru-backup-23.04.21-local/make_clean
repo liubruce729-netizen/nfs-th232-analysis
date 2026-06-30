@@ -1,0 +1,12 @@
+echo "> rm builds"
+rm -rf */build/*
+echo "> rm bins"
+rm -rf */bin/*
+rm -rf ./bin/*
+echo "> rm includes produced by cmake install"
+rm -rf */include/*
+rm -rf ./include/*
+echo "> rm libs"
+rm -rf */lib/*
+rm -rf ./lib/*
+cd ..

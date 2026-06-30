@@ -1,0 +1,30 @@
+#ifndef __GIMAGE_STAT__
+#define __GIMAGE_STAT__
+static char *image_stat[]={
+(char*)"21 21 4 1",
+(char*)"a c #000000",
+(char*)"b c #0000ff",
+(char*)". c #c0c0c0",
+(char*)"# c #ffffff",
+(char*)".....................",
+(char*)".########aa##a######.",
+(char*)".#######aab#aaa#####.",
+(char*)".######aab###a######.",
+(char*)".###a##ab###########.",
+(char*)".##aa##ab###########.",
+(char*)".###a##ab#####a#####.",
+(char*)".###a##ab#####a#####.",
+(char*)".##aaa#ab#####a#####.",
+(char*)".######ab#####a#####.",
+(char*)".#aaaa#ab####aa#a#a#.",
+(char*)".######ab###a#a##a##.",
+(char*)".#a##a#ab####aa#a#a#.",
+(char*)".##aa##ab###########.",
+(char*)".##aa##ab###########.",
+(char*)".#a##a#ab###########.",
+(char*)".######ab###########.",
+(char*)".#####aab###########.",
+(char*)".####aab##aaa#######.",
+(char*)".###aab#############.",
+(char*)"....................."};
+#endif

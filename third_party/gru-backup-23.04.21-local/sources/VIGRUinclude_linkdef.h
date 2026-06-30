@@ -1,0 +1,32 @@
+
+#pragma link C++ class GVMenuBar;
+#pragma link C++ class GVSpectraChooser;
+#pragma link C++ class GSpectrumIdentity;
+#pragma link C++ class GSpectra;
+#pragma link C++ class GVDialogAbout;
+#pragma link C++ class GVDialogSource;
+#pragma link C++ class GVMyQuestion;
+#pragma link C++ class GVPrintDialog;
+#pragma link C++ class GVTab;
+#pragma link C++ class GVBrowser;
+#pragma link C++ class GVToolBar;
+#pragma link C++ class GVToolBarVS;
+#pragma link C++ class GVToolBarVZ;
+#pragma link C++ class Vigru;
+#pragma link C++ class GVClassManual;
+#pragma link C++ class GVSpectraInfo;
+#pragma link C++ class GVListTree;
+#pragma link C++ class GSpectraDB;
+#pragma link C++ class GVClassAuto;
+#pragma link C++ class GVClass;
+#pragma link C++ class GVConsol;
+#pragma link C++ class GVPad;
+#pragma link C++ class GVSetPage;
+#pragma link C++ class GVSetRangeUser;
+#pragma link C++ class GVSetStat;
+#pragma link C++ class GVSetReset;
+#pragma link C++ class GVSetDuplication;
+#pragma link C++ class GVSetPeakFind;
+#pragma link C++ class GVSetRefreshTimer;
+#pragma link C++ class GVMeter;
+

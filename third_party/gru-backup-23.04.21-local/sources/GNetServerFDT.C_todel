@@ -1,0 +1,432 @@
+// Author: $Author: legeard $
+//
+//
+// GNetServerFDT : Network server to serv histograms
+//
+//
+//
+//////////////////////////////////////////////////////////////////////////
+
+// ***************************************************************************
+// *                                                                         *
+// *   This program is free software; you can redistribute it and/or modify  *
+// *   it under the terms of the GNU General Public License as published by  *
+// *   the Free Software Foundation; either version 2 of the License, or     *
+// *   (at your option) any later version.                                   *
+// *                                                                         *
+// ***************************************************************************
+
+
+#include "GNetServerFDT.h"
+#include "GNetServer.h"
+#include "fdt.h"
+
+ClassImp( GNetServerFDT);
+//_________________________________________________________________________________________
+GNetServerFDT::GNetServerFDT(int port) :
+	GNetServer(port) {
+	InitServer();
+	fPrompt_wait = false;
+	fReceiver = new fdtReceiver();
+}
+
+//_________________________________________________________________________________________
+GNetServerFDT::~GNetServerFDT() {
+	// Desctructor
+
+	if (GetRunningFlag()) {
+		StopServer();
+	}
+	if (fReceiver) {
+		delete fReceiver;
+		fReceiver = NULL;
+	}
+}
+//_________________________________________________________________________________________
+void GNetServerFDT::InitServer() {
+	fStarting = false;
+	InitCommand();
+	fVerbose = 0;
+	fThreadNet = NULL;
+	fServerName = gSystem->HostName();
+	fBufferSize = MFM_BLOB_HEADER_SIZE;
+	if (fBuffer ){
+		if ( !(fBuffer->IsAMFMBuffer())) {
+		delete fBuffer;
+		fBuffer = NULL;
+		}
+	}
+	if (fBuffer == NULL)
+		fBuffer = (GBuffer*) (new GBufferMFM(fBufferSize));
+	fQuiet = false;
+
+	if ((GetPort() < 1000) and (GetPort() > 40000))
+		SetPort(40404); // default port for Root communication
+	fVerbose = 0;
+
+	fMFMpt = new MFMCommonFrame(8, 0, 1, 0, MFM_BLOB_HEADER_SIZE);
+	//fZoneData_char = new char[MFM_BLOB_HEADER_SIZE];
+	//fSizeZoneData =MFM_BLOB_HEADER_SIZE;
+	//fMFMpt->SetPointers(fZoneData_char);
+	fError.SetDebugVerbose(fVerbose);
+	//set and init network root server
+}
+
+//_________________________________________________________________________________________
+void GNetServerFDT::InitCommand() {
+	SetCommand(new GCommand((TObject*) this, fAcq));
+}
+//_________________________________________________________________________________
+void GNetServerFDT::RazZone() {
+	for (int i = 0; i < fSizeZoneData; i++) {
+		fZoneData_char[i] = 0;
+	}
+}
+//_________________________________________________________________________________________
+void GNetServerFDT::StopServer(bool quiet) {
+	// Stop the Network server
+	// if quiet is true  no message is screened , default value is false
+
+	fQuiet = quiet;
+	if (!GetRunningFlag()) {
+		if (!quiet)
+			fError.TreatError(1, 0, " Server already stopped ");
+		return;
+	}
+
+	if (fThreadNet) {
+
+		SetRunningFlag(false);
+		if (!quiet)
+			fError.TreatError(0, 0, "Spectra Server is stopping");
+		sleep(1);// pas tres propre , il faudrait attendre un signal du theard stoppe(par un join) pour dire ok maintenant tu peux continuer.
+	} else {
+		fError.TreatError(1, 0, " Thread no present ");
+		return;
+	}
+	SetRunningFlag(false);
+
+	sleep(1);
+
+	if (fThreadNet) {
+		delete (fThreadNet);
+		fThreadNet = NULL;
+	}
+
+}
+
+//_________________________________________________________________________________________
+
+Int_t GNetServerFDT::StartServer(bool testport, bool autoportincrement) {
+	// Start the Network server
+	// if testport = true ,test port is free
+	// if autoportincrement = true : if not port is not free test (port+1) and takes it if free
+	// return available port.
+
+	Int_t port = GetPort();
+	Int_t testedport;
+	TString tempo;
+
+	if (testport) {
+		testedport = port;
+		//port = Testport(port, autoportincrement);
+		if (port <= 0) {
+			tempo.Form("Port Number Not available :%d ", testedport);
+			fError.TreatError(2, 0, tempo);
+			tempo.Form("Server can't start, check port number !");
+			fError.TreatError(2, 0, tempo);
+			return port;
+		}
+	}
+	SetPort(port);
+	StartThreadServer();
+	return port;
+}
+//_________________________________________________________________________________________
+void GNetServerFDT::Open(char mod) {
+	int test;
+	cout << " Debug GNetServerFDT::Open\n";
+	SetRunningFlag(true);
+	fReceiver->setTimeout(0);
+
+	for (int i = 0; i < 10; i++) {
+		test = fReceiver->open(GetPort());
+
+		if (test != OK) {
+			ErrorMessage(test, "StartThreadServer");
+			WaitWithPoint(10);
+
+			delete fReceiver;
+			fReceiver = NULL;
+			test = -1;
+		} else {
+			i = 20; // sortir de la boucle!
+			fIsOpen = true;
+		}
+	}
+	if (test < 0) {
+		fError.TreatError(
+				2,
+				0,
+				"Error in init FDT server , check if port is free or if a other FDT server is running");
+		exit(0);
+		return;
+	}
+	fReceiver->setTimeout(0);
+	fServerSocket = fReceiver->getServerSocket();
+	cout << " Debug GNetServerFDT::Open whith socket = "<<fServerSocket<<"\n";
+
+
+}
+
+//_________________________________________________________________________________________
+void GNetServerFDT::StartThreadServer(bool quiet) {
+	// Start the Network server
+	// if quiet is true no message appears (defautl is false)
+	fQuiet = quiet;
+	TString tempo;
+
+	if (GetPort() <= 0) {
+		fError.TreatError(1, 0, "Server can't start, check port number !");
+		return;
+	}
+	if (!GetRunningFlag()) {
+		Open();
+
+		;
+		// si le thread n'existe pas, on le cree
+		if (!fThreadNet) {
+			/*			fThreadNet
+			 = new TThread(
+			 "GRU_FDT_Server",
+			 (void(*)(void *)) &GNetServerFDT::ThreadWaitCommandsFromSeveralClients,
+			 (void*) this);*/
+			fThreadNet
+					= new TThread(
+							"GRU_FDT_Server",
+							(void(*)(void *)) &GNetServerFDT::ThreadWaitCommandsFromOneClient,
+							(void*) this);
+			// ... et on lance l'execution du thread
+			fThreadNet->Run();
+
+		}
+		// wait that fThreadNet quit its Starting status to continue
+		while (fStarting == true) {
+			usleep(1000);
+		};
+
+	} else {
+		if (!fQuiet)
+			fError.TreatError(1, 0, "Server already running ");
+	}
+}
+//_________________________________________________________________________________________
+void GNetServerFDT::ThreadWaitCommandsFromOneClient(void* arg) {
+	// Thread for waiting command
+	// not used , replaced by ThreadWaitCommandsFromSeveralClients more powerful
+
+	GNetServerFDT* iGNet = (GNetServerFDT*) arg; // instance of GNetServerFDT given in parameter
+
+	if (!(iGNet->fQuiet))
+		iGNet->fError.TreatError(0, 0, "FDT Server is running");
+
+	iGNet->SetRunningFlag(true);
+
+	while (iGNet->GetRunningFlag()) {
+
+		iGNet->TreatmentCommands();
+		usleep(100);
+		if (iGNet ->fVerbose > 0) {
+			iGNet ->fError.TreatDebug(iGNet ->fVerbose, 0,
+					"Treatment of Command Done");
+		}
+
+		iGNet->fStarting = false;
+	}// end of while
+}
+
+//________________________________________________________________________________________
+void GNetServerFDT::TreatmentCommands() {
+	TString streturn;
+	TString tempos = "GRU_OK";
+
+	TString recp;
+
+	//bool test = ReceiveConnections();
+	ReceiveConnections();
+
+}//________________________________________________________________________________________
+bool GNetServerFDT::TestClient(){
+	// TODO
+return true;
+}
+//_________________________________________________________________________________________
+bool GNetServerFDT::ReceiveConnections() {
+
+	bool ret = false;
+
+	if ((fReceiver->getConnectionSocket()) <= 0) {
+		// accept new connection from client
+		int err = fReceiver->connect();
+		if (err != OK)
+			ErrorMessage(err, "ReceiveConnections");
+		cout << "debug ReceiveConnections = "<<fReceiver->getConnectionSocket()<<"\n";
+		ret = false;
+
+	}
+
+	return ret;
+}
+//_________________________________________________________________________________________
+long long GNetServerFDT::DecodMFMsize(unsigned char* buf) {
+
+	long long nbytes = 0x8000;
+
+	if (buf[0] & 0x80)
+		nbytes = (int) buf[1] + ((int) buf[2] << 8) + ((int) buf[3] << 16); // little endian
+	else
+		nbytes = (int) buf[3] + ((int) buf[2] << 8) + ((int) buf[1] << 16); // big endian
+	nbytes = nbytes << (buf[0] & 0xf);
+	return nbytes;
+}
+
+//_________________________________________________________________________________________
+bool GNetServerFDT::GetBufferTransport(bool afficher) {
+	// Get  Transport Buffer
+	// return true if data ok
+
+	TString tempos;
+	//	fStatus = ACQ_OK;
+	cout
+			<< "-----------------------------------GetBufferTransport-------------\n";
+
+	RazZone();
+
+	int err = fReceiver->receive(fMFMpt->GetPointHeader(), 4);
+
+	if (err != OK) {
+		fError.TreatError(2, err, "GetBufferTransport: Reception error");
+		return false;
+	}
+
+	unsigned int Cmd = *((unsigned int *) fMFMpt->GetPointHeader());
+	if (Cmd == FDT_HELLO) {
+		fError.TreatError(1, err, "GetBufferTransport: Hello");
+		return true;
+	}
+
+	if (Cmd == FDT_DISCONNECT) {
+		// disconnect
+		return false;
+	}
+
+	long long nbytes =
+			DecodMFMsize((unsigned char*) (fMFMpt->GetPointHeader()));
+
+	cout << "debug  reception of " << nbytes << "bytes\n";
+	cout << "debug GetFrameSize" << fMFMpt->GetFrameSize()
+			<< "\n";
+	if (nbytes > fMFMpt->GetFrameSize()) {
+		fMFMpt->SetBufferSize(nbytes);
+	}
+
+	err
+			= fReceiver->receive(((char*) fMFMpt->GetPointHeader()) + 4, nbytes
+					- 4);
+	fMFMpt->SetAttributs();
+	fMFMpt->HeaderDisplay();
+	fMFMpt->DumpRaw(48, 0);
+
+	fBuffer->SetExternalDataZone(fMFMpt->GetPointHeader(),
+			fMFMpt->GetFrameSize());
+
+	return true;
+}
+
+//_________________________________________________________________________________
+
+void GNetServerFDT::GetBuffer(bool afficher) {
+
+	cout << "-----------------------------------GetBuffer-------------\n";
+	//Get data buffer
+
+	TString tempos;
+
+	return;
+}
+
+//_________________________________________________________________________________
+
+
+void GNetServerFDT::ReadBuffer() {
+	// Read a buffer
+	TString tempos = "GRU_OK";
+	struct timeval mt_reference;
+	struct timeval mt_Timeout;
+	struct timezone tz;
+	gettimeofday(&mt_Timeout, &tz);
+	gettimeofday(&mt_reference, &tz);
+	int time_out = 400;
+
+	fStatus = ACQ_OK;
+	while (true) {
+		//bool test=ReceiveConnections();
+		ReceiveConnections();
+		if (GetBufferTransport(false)) break;
+
+		gettimeofday(&mt_Timeout, &tz);
+
+		if (((mt_reference.tv_sec - mt_Timeout.tv_sec) > time_out)) {
+			fError.TreatError(1, 0, "Time out with no event");
+			break;
+		}
+
+	};
+	if (fBuffer)
+		fBuffer->SetAttributs(true);
+
+}
+
+//_________________________________________________________________________________________
+void GNetServerFDT::WaitCommandsFromClient() {
+
+	// Wait till we get the start message
+	// If the message is in few words, all words must be separate by a space ' '
+	// not threaded waiting command
+
+	GNetServerFDT* iGNet = this;
+
+	fError.TreatError(0, 0, "Spectra Server is running");
+	iGNet->SetRunningFlag(true);
+	while (GetRunningFlag()) {
+
+		// Check if there is a message waiting on one of the sockets.
+		// Wait not longer than 20 ms (returns -1 in case of time-out).
+
+		iGNet->TreatmentCommands();
+
+	}// end of if((s =fMon->Select(20)!=(TSocket*)-1)
+	usleep(100);
+	//  if (gROOT->IsInterrupted())break;
+}// end of while(1)
+
+//_________________________________________________________________________________________
+void GNetServerFDT::ErrorMessage(int err, const char * message) {
+	TString tempos;
+	switch (err) {
+	case R_TCP_SOCKET:
+		tempos.Form("%s (R_TCP_SOCKET)", message);
+		break;
+	case R_TCP_BIND:
+		tempos.Form("%s (R_TCP_BIND)", message);
+		break;
+	case R_TCP_LISTEN:
+		tempos.Form("%s (R_TCP_LISTEN)", message);
+		break;
+	default:
+		tempos.Form("%s (UNKNOWN)", message);
+	}
+
+	fError.TreatError(2, err, tempos);
+}
+//_________________________________________________________________________________________

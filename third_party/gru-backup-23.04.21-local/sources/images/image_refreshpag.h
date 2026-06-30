@@ -1,0 +1,31 @@
+#ifndef __GIMAGE_REFRESHPAG__
+#define __GIMAGE_REFRESHPAG__
+static char *image_refreshpag[]={
+(char*)"21 21 5 1",
+(char*)"# c #000000",
+(char*)"b c #008000",
+(char*)". c #c0c0c0",
+(char*)"c c #ff0000",
+(char*)"a c #ffffff",
+(char*)".....................",
+(char*)".#aaaaaaaa.#aaaaaaaa.",
+(char*)".#aaaaaaaa.#aaaaaaaa.",
+(char*)".##aaaaabbbbbbccaaaa.",
+(char*)".#aaaaabbbbbbbbacccc.",
+(char*)".#ccccbbbbbbbbbbaaaa.",
+(char*)".#aaabbbba.##bbbbaaa.",
+(char*)".#aabbbbaa.#aabbbbaa.",
+(char*)".#aabbbaaa.#aaabbbaa.",
+(char*)".###bbb###.####bbb##.",
+(char*)".bbbbbbbbb.....bbb...",
+(char*)".#bbbbbbbc.#aaabbbaa.",
+(char*)".##bbbbbca.#aabbbbaa.",
+(char*)".#aabbbcaa.##bbbbaaa.",
+(char*)".#aaabcaaa.#bbbbaaaa.",
+(char*)".#aaacaaaa.#bbbacaaa.",
+(char*)".##acaaaaa.##baaacaa.",
+(char*)".#acaaaaaa.#aaaaaaca.",
+(char*)".#caa#aaaa.#aaa#aaac.",
+(char*)".#########.#########.",
+(char*)"....................."};
+#endif

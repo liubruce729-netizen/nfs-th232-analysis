@@ -1,0 +1,31 @@
+
+
+What is GUser and How to use it
+
+GUser is a derived c++ class from GAcq. GUser is available to user wanting to introduce specific C++ code to analyse Ganil data.
+
+GUser is composed of 6 empty methods ready to be fill by user.
+
+InitUser() is called  by SetUserMode()
+InitUserRun()is called by DoRun  
+User() is called for each new event
+EndUserRun() is call either DoRun is finished either on a Stop 
+EndUser() is called by EndUser
+
+and  InitTTreeUser() is used to define branch in case TTree output is validated
+
+To compile GUser and load it
+ you have to do a "make" , (ofen a "make clean" is usefull) 
+ and for root version < 5.34.36 do  a "gROOT->ProcessLine(".L ./GUser_C.so");" in GRU to load  it
+ gROOT->ProcessLine(".L $ROOTSYS/lib/libHist.so");
+ gROOT->ProcessLine(".L ./GUser_C.so");//load and compile TUiser class 
+for root version > 6.14   
+include these line in script
+R__LOAD_LIBRARY(libHist)
+R__LOAD_LIBRARY(GUser_C)
+
+
+
+cmake -DCMAKE_INSTALL_PREFIX=../ ../
+make
+

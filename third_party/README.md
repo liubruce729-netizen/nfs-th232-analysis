@@ -11,4 +11,6 @@ Current packages:
 
 - `mfmlib-backup-25.11.07`: local backup of GANIL MFMlib used by the working
   NFS analysis machine.
+- `gru-backup-23.04.21-local`: local backup of GANIL GRU used by the working
+  NFS analysis machine, including a small local ROOT component-name fix.
 

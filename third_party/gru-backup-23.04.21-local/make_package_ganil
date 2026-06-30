@@ -1,0 +1,63 @@
+# summury of command to compil GRU 
+
+# root have to be compiled with cmake
+# GRU Must be compiled with exactly same processor type than ROOT have been compiled
+
+# Note for ROOT 6 : the max version of ROOT for Centos7 is 6.16.00
+# after compilation of ROOT change in ROOT directory in ROOTUseFile.cmake file  
+# cmake_minimum_required(VERSION 3.4.3 FATAL_ERROR) -> cmake_minimum_required(VERSION 3.17.5 FATAL_ERROR) ( for Centos 7)
+
+if ( $?GRUDIR ) then
+    echo "GRUDIR = "{$GRUDIR}
+else 
+    setenv GRUDIR .
+    echo "GRUDIR set to "{$GRUDIR}
+endif
+
+echo "ROOTSYS = "{$ROOTSYS} 
+if ( $?MFMDIR  ) then
+   echo "MFMDIR = "$MFMDIR
+else
+   echo "MFMDIR not set"
+exit
+endif
+
+if ( $?GRU_INSTALL_DIR ) then
+    echo "GRU_INSTALL_DIR = "{$GRU_INSTALL_DIR}
+else 
+    setenv GRU_INSTALL_DIR {$GRUDIR}/GRU_install
+    echo "GRU_INSTALL_DIR set to "{$GRU_INSTALL_DIR}
+endif
+
+
+# Gsoap Library
+cd $GRUDIR/gsoap ;mkdir -p build ;cd build; rm -rf ../build/*
+cmake -DCMAKE_INSTALL_PREFIX=../ ../sources/ ;make install
+
+cd $GRUDIR/gsoapSC; mkdir -p build ;cd build ; rm -rf ../build/*
+cmake -DCMAKE_INSTALL_PREFIX=../ ../sources/; make install
+
+# GRU 
+cd $GRUDIR ;mkdir -p build;cd build ; rm -rf ../build/*; 
+cmake3 -DNET_LIB=YES -DCMAKE_INSTALL_PREFIX={$GRU_INSTALL_DIR} ../sources/
+make -j8 ; make install
+
+cp {$GRUDIR}/gsoapSC/bin/* {$GRU_INSTALL_DIR}/bin
+cp {$GRUDIR}/gsoap/bin/*   {$GRU_INSTALL_DIR}/bin
+cp {$GRUDIR}/*.pcm  {$GRU_INSTALL_DIR}/lib
+cp {$GRUDIR}/build/*.pcm  {$GRU_INSTALL_DIR}/lib/
+
+cd $GRUDIR
+echo " -------list bin ---------------"
+ls -l --color=auto ./bin
+ls -l --color=auto ./*/bin
+echo " -------list lib ---------------"
+ls -l --color=auto ./lib
+ls -l --color=auto ./*/lib
+echo " -------------------------------"
+ls -l --color=auto ./*/include
+
+cd $GRUDIR/sources/
+doxygen Doxyfile.GRU
+cd $GRUDIR
+mv html  {$GRU_INSTALL_DIR}/

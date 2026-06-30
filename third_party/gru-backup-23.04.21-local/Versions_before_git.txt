@@ -1,0 +1,382 @@
+
+--------------------------------------------------------------------------------------------------------------------
+------------
+| VERSIONS |
+------------
+
+Version 1.0
+The aim of this version is to copy and/or verify raw data stored on a device.
+The device can be a file  or a tape.
+
+Version  1.1
+A specific graphical interface  was created to creat Ganil_Tape
+-If we do a copy from a tape to disk , the limited files is 2 GB, if a run is bigger, is divised in few files.
+-with destination tape , you can go end of tape to fill it with others runs.
+-it possible to create log file
+
+
+
+Version 2.0
+- a TCP device was added , client of Ganil Acquisition to get data buffers or/ and spectra. 
+- conversion of Ganil spectra file in root histogram
+- conversion of Ganil format run in TTree (with one sheet by parameter)
+A dump can be done in raw data mode (default)  or in envents data.
+- statistics on a run (file) can be done
+- convertion of Ganil format run in TTree (in console mode)
+
+Version 2.1
+- a new Makefile to compile with or not with Graphical interface
+- a begining of Spectra class has been developped  
+
+Version 2.2
+ - creation of a histogram class (database of spectra)
+ - Incrementation of spectra in line 
+ - user mode 
+ - a Class "GAcq" has been created separate event handle with buffer handle  
+    all class 
+ 
+Version 2.3
+  - creation of TTree for SCALER 
+  - for Ganil_Tape
+       - use library of GRU ( not a specific)
+       -add a chek buton to see or not parameter = 0
+       -add a buton to select directory  in Destination page
+
+Version 2.31
+  - debug in destroyer of GAcq and GSpectra ( NOT FINISHED)
+  - creation of loadable library (see INSTALL)
+Version 2.40
+  - TMapFiles are not use any more
+  - New Network Classes (GNetServerRoot and a GNetClient) 
+  - a Visualisation in beta ViGRU
+
+
+Version 06.02  ( the number of version change! now we give a date (06.01 for january 2006))
+   - a Visu (ViGRU) is developped  ( see ViGRU paragraph) 
+
+
+Version 06.04
+    -the qt library is managed in a differnet way.
+     $ROOTGUI is not use any more
+     works only for root version 5.10 or above
+  
+Version 06.06
+ -  multi-hits ( mutiplicity parameters)  is taken in account.
+
+Version 06.09
+we give up QT and use graphic library of root
+
+Version 07.07
+  - Warning a lot of changes ! 
+  - Vigru is full root application
+  - a User GUser class is available for user traitrement
+  - Change of methode name: ( to avoid conficts with methods of TObject)
+          GDevice::Info    ->     GDevice::Infos
+          GDevice::Read    ->     GDevice::ReadBuffer
+          GDevice::Write   ->     GDevice::WriteBuffer
+          GDevice::GetName ->     GDevice::GetDeviceName
+          GAcq::Info       ->     GAcq::Infos
+          GVSpectrumIdentity::GetName ->     GVSpectrumIdentity::GetHistoName
+          GSpectraInfo::GetName ->           GSpectraInfo::GetSpectraName
+          GVListTree::Delete    ->           GVListTree::DeleteItem
+          GVListTree::Checked   ->           GVListTree::CheckedItem
+  - a spectrum data base is created in GSpectra, and as Server of this database (GNetServerRoot) cant be used to 
+  - 2 specific class haved been added to do specific calibrations in ganil acquisition (GEtalonnage to treat calibration data and GSoapserver to communicate with 
+      DAS). A new application "Calimero" is generated to treat calibration of must and matacq card.
+  - GRU can be compiled without ganil network library (when we run "make GRU") 
+    It is easier to compile outside of Ganil.  
+   
+
+Version 07.10
+  - A new Ganil_Tape is available.
+    QT library are completely removed. 
+    Statistics ares given for each parameters
+  - the version of non graphic Ganil_Tape have been given up, use GRU!
+  - A bug give conversion and analyse of Ganil Data wrong So DONOT USE for this
+     
+ Version 07.11
+  - A bug giving conversion and analyse of Ganil Data wrong   is corrected
+  - new popup menu and setup allows vigru to have smaller dimension and can run on a labtop screen.
+
+ Version 07.12
+  - GCout is a "ROOT" class , have been completed and  gcout is not a global variable.
+  - a bug in convertion of Ganil spectrum have been corrected
+
+ Version 08.07
+  - All management of histograms are done via the histogram database
+  - Spectra server can be multiple on same machine if  no port different
+  - Event generated with a Matacq card are taken in account
+  - Save configuration in vigru have been review
+  - Histograms can be add in a family.
+  - A start of graphical interface  GGRU (in developpement)
+  - The load of Ganil file is temporaly removed from vigru 
+ 
+Version 08.07_1
+  - remove bug of name null (".xml")  in saving configuration
+  - can load without root config file
+ 
+Version 09.03
+  -New version of vigru, new look. 
+  -Size of buffer can change
+  -MetaServer in its fisrt version (concentrator of lists of histograms provided by several servers)
+  -Can be compiled on MacOSX, 32 or 64 bits linux.
+  
+Version 09.10
+  -Spectra server can use TH1,TGraph and TGraph2D 
+  -Vigru can display TGraph and TGraph2D
+  -a bug on tcp ganil connection removed 
+  -Class GSpectrumIdentity include all management of TH1,  TGraph and TGraph2D  
+    Outside of this class, only GSpectrumIdentity object should be used.
+  -In vigru FFT of histogram can be done
+  -a soap client have been defined
+  
+Version 09.11
+  - vigru can save spectra in txt format
+  - Calibration of mataq for piedestals and time
+  
+  
+Version 09.12
+  - vigru can set log x,y,z on page
+  - vigru can detect peak on a pad or whole page (see Tools menu)
+
+
+Version 10.05
+  - 2 serious bugs have been removed from spectra server
+    these bugs could hang server and client
+  - Vigru : a reset of spectra of a full page is available
+            a reset of all spectra of a server is available
+  - a Client Narval have been done (connexion on a Watcher)
+  - a standalone GRU  without cint is available ( GRUK for GRU kernel)
+    this gru is drived by Soap client (GRUC) (do a "make" in gsoap directory
+    thie GRUK and GRUC are only available in Ganil context 
+
+
+Version 10.10
+   - the scalers values can be dump in GanilTape 
+   - a list of empty TCut can be defined in spectra server
+    these TCut are defined with Vigru 
+   - TMayaHisto are taken in account.
+   - Leaks memory are reduced
+   -TCut are fully completed , they can be defined end send to server, also they can be saved and reloded.
+   -Save of spectra in root format takes in account family (directory) name.
+   -Bug in read of XML file have been removed ( XmlDoc was free too early)
+   -Display serveral spectra in same pad is possible 
+
+Version 10.11
+    - bug resolved : reset spectra form a server 
+    - bug resolved : Cut form file could'nt be modified
+    - bug resolved : apply log on pad with multi spectra 
+
+Version 11.01
+   - new menu to define process (copy, fft , scatter). this processes are applied from a over pad
+   
+Version 11.09
+   - add button to select pad if middle mouse button is not available
+
+Version 11.11
+   - generated executables are now in /bin directory and library in /lib
+   - 2 files (thisgru.csh and thisgru.ch) to define or complete $PATH and $LD_LIBRARYPATH
+   
+Note ROOT 5.30->5.32.00 do not allow a good operating (Spectra->Clone problem) so use 5.32.01 or above 
+
+Version 12.03
+   - Allow to generate random events from a ACTION file (GGeneBuffer * in = new GGeneBuffer("./ACTIONS_local.CHC_PAR");)
+   - Tested for FC15
+   - Out device  in GAcq (indevice,outdevice)  is available.
+
+Version 12.06
+   - Read and write compressed file in gzip format (run.dat.gz) 
+     See GTape->SetCompressionLevel()
+   - Improvement in GGeneBuffer : default gaussian random generator 
+
+
+Version 13.03
+   - Graphical version of GRU GGRU
+   - a all in one GRU 
+   - all soap function have been revisited and simplied  
+   - a new GBase class on which all classes of GRU inherit
+      this Class contains 
+   - TClib and GNetCLientGanil removed
+   - Calimero is same as GRUcore 
+   - A State Machine controle the steps in case of use of GRUcore via a class GCommand 
+     which define all available commands to drive GRUcore and include thie state machine
+   - Read of MFM frames 2.2 in files 
+   - GBuffer become virtual class  and GBufferIn2p3 and GBufferMFM inherits  form GBuffer
+   - new virtual class GEventBase and GEvent and GEventMFM inherits form  GEventBase
+   - Le connexion to the old Ganil acquisition is not supported . GNetClientGanil class have been removed
+     TCPLIB directory have been removed.
+   - The notion of "process" included in version 11.01 changes its name to "duplication" and "computation" (to be clearer).
+
+
+Version 13.04 
+    - remove a big bug in event analysis.
+    
+Version 13.04a
+    - remove an other bug in reset histogram 
+    
+Version 13.07.00
+	- new MFM library , in replacement of  irfu library
+	- analyse offline and online of GET MFM events
+	- new usage of vigru summurized with "vigru --help" command
+	- Calimero have been completly replaced by GRUCore -> modification of Geco
+	- GNetSpy class is removed due to no usage
+
+Version 13.11.03
+	- MFM library completed with exogam frame and first ebyedat frame
+	
+Version 14.01.21
+    - MFM Library completed with merge frame and doxygen doc
+    
+Version 14.02.00
+	- Ganil version with less bugs 
+	
+Version 14.04.00
+    - MFM merge understood in GUser 
+    - Modification of Main class in vigru 
+    - unification of GRUlib 
+    - MFM Oscilloscope understood in GUser
+    - File ACTION_expname.CHC_STR not necessary in case of EBYEDAT (only ACTION_expname.CHC_PAR )
+    - EventInit compatible with GECO
+        Order to find ACTION file  gacq->EventInit("name")
+        1) in local directory searching ACTION_local.CHC_PAR or ACTION_name.CHC_PAR file
+        2) in GECO  directory searching ACTION_name.CHC_PAR file
+        3) in DAS   directory searching ACTION_name.CHC_PAR file
+        4) searching th "name" file ( for instance "name" = "/home/tartenpion/mydirectory/ACTION_myfile.CHC_PAR")
+    - GClientMemory in writing
+    - Vigru a new graphical interface to setup sources (spectra server)
+    
+Version 14.07.20
+	- EventInit : fix bugs
+	- MFM : fix minor bugs
+	- MFM : add full cobo frame
+	- color in info, warning and error print
+	- New Class GFile . GTape and GMFMFile inherits form GFile.
+	- ATTENTION! include/cards/GCobo.h  move to  MFMlib/Cobo.h
+	
+Version 14.07.20a
+	- correction de bug dans MFM DataParameter->creatLabelToExist() ; The stat in GAcq was impossible.
+	
+
+Version 15.02.00
+     - compilation with clang OK
+     - tested with root 5.34.25 (not yet good for root 6 )
+     - catch of Ctrl C to stop servers before exit
+     - Ganil_Tape is lighter and accepts  direct run file ( you can launch " Ganil_Tape MyRun.dat")
+     - tested on Ubuntu 14.04 but with gsoap 2.8.17-1 ! ( you need this gsoap version or >)
+     - correction of a bug MFM in  CoboSetHitPat method
+     - correction of a bug in list severs in vigru	 
+     
+ Version 15.03.xx
+ 	- New MFM frame for MUTANT
+ 	- New MFM frame for RIBF
+ 	- New MFM frame for xml data parameter 
+ 	- New MFM frame for Scaler
+
+ Version 15.10.xx
+     - Vigru include GAcq 
+     - 1 new class for specific analysis : GAcqNumexo2 
+     - Vigru Oscilloscope for Numexo2
+     Note : this version is not compatible with gsoap  2.7.16 (version for Centos 6)   
+     It is why a version of gsoap has been included in GRU directory.
+     this 2.7.17 have to be compiled and used in gsoapSC library for its usage
+     this soaplib need to be unziped and compiled and a link gsoaplib have to be created to this unziped directory
+     to compile this you have to do  "./configure CXXFLAGS=-fPIC" and "make"
+     So in directory gsoapSC, gsoapGECO and gsoap do a "make GSOAPLIBDIR=directory_of_new_gsoap"
+     
+
+  Version 16.03.09
+    - Ready for  Centos7 gcc4.8 and gsoap 2.8.16-8(version for Centos 7)
+    - Change in int vector in gsoap ( now transmission of int vector are un structure)
+      DAS have to be ready for this change.( necessity for calibration of Must2)
+    - soap interface to avoid redefinitions and better separation between GRU and soap code
+    - New MFM frame Hello to check activity of flow
+    - The MDI mode have been remove and aioGRU given up
+    - New method in class GSpectra  ScanDirectoryMemory(TFolder* folder,char* path) {
+      scan a TFolder get all spectra and references them  in Data Base (GSpectraDB)
+      
+   Version 16.09.03  
+    - New Chimera Frame
+    - Vigru in oscillo mode, few little bugs removed
+    - 2 standard directories with GUser class for analysis,(standard Ganil and MFM)
+    
+   Version 17.04.25
+    - Remove a bug reading spectra root file with vigru. Spectra with no family couldn't be displayed 
+    - 2 New Frames Vamos Position Detector Frame and  Ionization Chamber Frame.
+    - Compiled on Unbutu 16.04 and include tinyxml library for MFM library is tinyxml is not with system.
+      done with root 5.34.36 and 6.08.06   
+     - add a new format for Matacq card in ebyedat buffer
+     -with 6.08 version dictionnary have problem (root people assure to correct
+      this for version > 6.10  
+      
+    Version 17.09.00
+     - New Frame Neda 
+     - few modification around MFM statistics
+     
+    Version 17.10.04
+     - 5 New Frames for S3 
+     - few modifications around MFM statistics  
+     - remove a bug in conversion of MFM frames to TTree file
+     - remove minor bugs in display informations around MFM read files
+      
+    Version 17.11.10
+      -  few modifications around MFM Neda frame   taking account frame in test more ( revision 0) and future more (revision 1)
+      -  securisation of attibutes in Class ( Public -> private or protected)
+      -  remove a bug in write of deta time in Merge Frame.
+      -  remove bug in analyse of Diamant frame (GRU,  GEventMFM)
+      -  New Frame Neda Compressed 
+    
+    Version 17.12.01
+      - Modification in Neda Frames (frame size 560 -> 512)
+    
+    Version 18.02.02
+      - Add revision  (0 and 1)  for Neda frames 
+      - New options in MFMtest to treat only few frames
+      
+    Version 18.03.12
+      - Correction of bugs in  simulated Diamant frames
+      - more than one spectra servers can run in same process.
+      - Ready for Centos 7 
+      
+   Version 18.06.10
+      - work whith Root 6.12.06 but not fully ready
+      - in MFMNedaFrame mask du bitfield et  ajout des fonctions bool MFMNedaFrame::IsNeutron, MFMNedaFrame::IsCFDValid, MFMNedaFrame::IsCFDParity
+      - remove bug in MFMNedaCompFrame::GetNeutronFlag & MFMNedaCompFrame::SetNeutronFlag
+      
+   	  
+   Version 18.09.03
+      - Ganil_Tape is replaced by  a commande line application :  Blocktest.
+   	  - Correction bug trasmission of list of spectra in soapserver 
+   	  - The include directory is now empty. is filled after a "make" and a "make install"
+   	  - Ready for Root 6.14.04
+   	  
+   Version 19.01.30
+   	  - tested on Unbutu 18
+   	  - Add Frame MFMVamosTACFrame
+   	  - Add Frame MFMBoxDiagFrame
+   	  - MFM can be compiled with no tinyxml if no usage. (make  NO_MFMNXML=YES) 
+   	  - on gitlab.in2p3.fr ( GRU project) 
+   
+   Version 19.02.26
+   	- Makefile better for git (creation of empty directories) 
+   	- Makefile with "make install" 
+   	- Add SumSpectra and few improvement in state machine
+   	
+    Version 19.04.05
+       	- No wait in relaunch Spectra server or Soap server
+    	- debug the  usage of SetRangeUser (Zoom) which can be applied on pad, tab or all tabs
+    	- Add Time-Stop in  MFMBoxDiagFrame
+ 
+    Version 19.06.30
+    	- usage of Cmake in all libraries (exception  FDTlib) so some change in the names of directories and the place of sources files
+
+   Version 19.07.25
+   	- usage of CMake applied to Blocktest 
+   
+   Version 19.11.05
+   	- MFMlib is detached of GRU projet so to compil modify CMakeLists.txt to find MFMlib or compile with this option CMake -DMFMDIR=directoryofMFMlib
+   	- New Frames MFMReaScopeFrame and MFMReaGeneriqueFrame ( with MFMlib version >= 19.10.25)
+   	- Version number is automatic and is date of compilation
+      
+    Version 20.XX.XX and more 
+   	 See git informations
+   	

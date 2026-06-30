@@ -1,0 +1,81 @@
+---
+image: gitlab-registry.in2p3.fr/ganil-acq/analysis/docker_for_gru:latest
+
+
+stages:
+   - intro
+   - build
+   - doc
+
+job_intro:
+   stage: intro
+   script:
+      - echo " Compilation et test avec un docker file ubuntu"
+
+job_build:
+   stage: build
+   script:
+      - source /usr/local/bin/thisroot.sh
+      - mkdir MFMlib; cd MFMlib
+      - curl --location -o file.zip --header
+         "PRIVATE-TOKEN:8yLm8C_szhFWHEzdcgEp"
+         "https://gitlab.in2p3.fr/Ganil-acq/Analysis/MFMlib/-/jobs/artifacts/master/download?job=job_2"
+      - unzip file.zip
+      - cd ..
+      - mkdir GetMFM; cd GetMFM
+      - curl --location -o file.zip --header
+         "PRIVATE-TOKEN:spbzC7xkmU2EhzgmCzds"
+         "https://gitlab.in2p3.fr/Ganil-acq/DataFlow/ActorsC/GetMFM/-/jobs/artifacts/master/download?job=job_build"
+      - unzip file.zip
+      - cd ..
+      - cd gsoapSC/
+      - mkdir build
+      - cd build
+      - cmake -DCMAKE_INSTALL_PREFIX=../ ../sources/
+      - make
+      - make install
+      - cd ../..
+      - cd gsoap/
+      - mkdir build
+      - cd build
+      - cmake -DCMAKE_INSTALL_PREFIX=../ ../sources/
+      - make
+      - make install
+      - cd ../..
+      - mkdir build
+      - cd build
+      - cmake -DNET_LIB=YES -DCMAKE_INSTALL_PREFIX=../GRU_install ../sources/ -DMFMDIR=../MFMlib/ -DGETMFMDIR=../GetMFM/
+      - make
+      - make install
+      - cd ..
+      - cp build/*.pcm  GRU_install/lib/ 
+      - cp build/*.pcm  GRU_install/bin/
+
+   artifacts:
+      paths:
+         - GRU_install/lib/libGetMFMDeviceStatic.a 
+         - GRU_install/lib/libGRU.a  
+         - GRU_install/lib/libGRUDict_rdict.pcm  
+         - GRU_install/lib/libGRU.so
+         - GRU_install/bin/Blocktest  
+         - GRU_install/bin/GRU  
+         - GRU_install/bin/GRUC  
+         - GRU_install/bin/GRUCore  
+         - GRU_install/bin/GruSoapServer  
+         - GRU_install/bin/libGRUDict_rdict.pcm  
+         - GRU_install/bin/SCClient
+         - GRU_install/bin/SCSoapServer
+         - GRU_install/bin/vigru
+         - GRU_install/include/*
+
+pages:
+   stage: doc
+   script:
+      - cd sources
+      - doxygen Doxyfile.GRU
+      - cd ..
+      - mv html public
+   artifacts:
+      paths:
+         - public
+

@@ -1,0 +1,30 @@
+#ifndef __GIMAGE_CANCELZOOM__
+#define __GIMAGE_CANCELZOOM__
+static char *image_cancelzoom[]={
+(char*)"21 21 4 1",
+(char*)"b c #000000",
+(char*)". c #c0c0c0",
+(char*)"# c #ff0000",
+(char*)"a c #ffffff",
+(char*)".....................",
+(char*)".##aaaaaaaaaaaaaaa##.",
+(char*)".###aaaaaaaaaaaaa###.",
+(char*)".a###aaaaaaaaaaa###a.",
+(char*)".aa###aaaaaaaaa###aa.",
+(char*)".aabbbbbbbbbbbbbbbaa.",
+(char*)".aabbbbbbbbbbbbbbbaa.",
+(char*)".aaaaa###aaaa#bbbaaa.",
+(char*)".aaaaaa###aabbbbaaaa.",
+(char*)".aaaaaaa##bbbbaaaaaa.",
+(char*)".aaaaaaabbbb#aaaaaaa.",
+(char*)".aaaaaabbb###aaaaaaa.",
+(char*)".aaaabbbb#a###aaaaaa.",
+(char*)".aaabbb##aaa###aaaaa.",
+(char*)".aabbbbbbbbbbbbbbbaa.",
+(char*)".aabbbbbbbbbbbbbbbaa.",
+(char*)".aa###aaaaaaaaa###aa.",
+(char*)".a###aaaaaaaaaaa###a.",
+(char*)".###aaaaaaaaaaaaa###.",
+(char*)".##aaaaaaaaaaaaaaa##.",
+(char*)"....................."};
+#endif
