@@ -1,0 +1,52 @@
+---
+image: gitlab-registry.in2p3.fr/ganil-acq/analysis/gru
+
+
+stages:
+   - intro
+   - build
+   - runtest
+   - doc
+
+job_1:
+   stage: intro
+   script:
+      - echo " Compilation et test avec un docker file ubuntu"
+
+
+job_2:
+   stage: build
+   script:
+      - mkdir build
+      - cd build
+      - cmake -DCMAKE_INSTALL_PREFIX=../ ../sources/
+      - make
+      - make install
+      - cd ..
+      
+   artifacts:
+      paths:
+         - bin/MFMtest.exe
+         - lib/libMFM.so
+         - lib/libMFM.a
+         - include/*
+
+job_3:
+   stage: runtest
+   script:
+      - cd bin
+      - ./MFMtest.exe -test
+
+pages:
+   stage: doc
+   script:
+      - cd sources
+      - doxygen Doxyfile.MFM
+      - cd ..
+      - mv html public
+   artifacts:
+      paths:
+         - public
+
+
+

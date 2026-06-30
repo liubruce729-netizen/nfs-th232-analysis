@@ -1,0 +1,8 @@
+
+#ifndef __MFMconfig__
+#define __MFMconfig__
+
+#cmakedefine BUILD_MFM_DATE "${BUILD_MFM_DATE}"
+#cmakedefine BUILD_MFM_TIME "${BUILD_MFM_TIME}"
+
+#endif

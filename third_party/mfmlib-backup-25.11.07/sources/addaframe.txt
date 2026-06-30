@@ -1,0 +1,28 @@
+
+This document relate all points to add a frame in MFM Frame directory and in Gru also
+
+In MFM directory
+- Generate Frame class code (*.cc and *.h )  This class inherits from MFMBasicFrame or MFMBlobFrame. In few cases, 
+the heritage came from a other  Frame which elseself inherits from MFMBasicFrame or MFMBlobFrame ( example NedaFrame)
+- Introduce the new Frame id in MFMTypes.h
+- Add MFMMyNewFrame in CMakeLists.txt
+- Add MFMMyNewFrame.h in MFMAllFrames.h
+- Complete GetShiftEN(),  GetShiftTS() and GetShiftLocation()  in MFMCommonFrame
+- Add tests in MFMtest.cc to test read and write frames tests
+ - int MFMGeneral.c/h add this frame wherer is necessary
+
+in GRU
+
+ - int GBuffer.C add type of frame in IsAEventBuffer() if is not a event buffer
+ - in  GEventMFM.h add declaration of the frame pointer.
+ 
+ -in GEventMFM.C  
+ 	-> in contructor , add pMyNewFrame = new MFMMyNewFrame();
+ 	-> in ~GEventMFM() ,add delete 
+ 	-> in ReadNextEvent(GBuffer* _buffer)  -> add   case MFM_MYNEW_FRAME_TYPE: {...
+ 	-> modify  GetNbItems( ..) if necessary
+ 	-> in GetTimeStamp() , add       if ((fFrameType == MFM_MYNEW_FRAME_TYPE)) {...
+ 	-> in GetEventNumber(),  add 	if ((fFrameType == MFM_MYNEW_FRAME_TYPE)) { ...
+ 	-> in MakeEventHeader, add  if ((fFrameType == MFM_MYNEW_FRAME_TYPE)) { ...
+ 	-> in FillEvent(int enventtype, long long timestamp, int number) if (enventtype == MFM_MYNEW_FRAME_TYPE)) { ...
+ 	-> in Reame add infomation about GRU evolution ( Now in git message)

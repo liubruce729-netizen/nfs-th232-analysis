@@ -1,0 +1,1 @@
+#define MFM_VERSION  "${MFM_VERSION_STRING}"

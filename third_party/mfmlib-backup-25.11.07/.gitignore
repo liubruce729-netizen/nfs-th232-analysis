@@ -1,0 +1,17 @@
+*.[oa]
+*~
+/bin/*
+/lib/*
+/include/*
+/build/*
+/latex/*
+/html/*	
+/sources/html/*
+/sources/latex/*
+/html/*
+/latex/*
+/sources/TODO.txt
+/src_bis/*
+*.exe
+/share/*
+
