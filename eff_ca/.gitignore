@@ -1,0 +1,11 @@
+*.root
+*.spe
+*.sin
+*.aef
+*.aca
+*.png
+*.pdf
+*.ps
+*.log
+__pycache__/
+*.pyc
