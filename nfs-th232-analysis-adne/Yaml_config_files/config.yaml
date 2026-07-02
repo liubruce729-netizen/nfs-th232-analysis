@@ -2,8 +2,8 @@ nfs_exo_ana:
   tree: true
   spec: true
   raw_tree: false  # copy event-built MFM events into RawTree without cuts
-  crystal_time_correction: true
-  correction_path: "/home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne/out/nfs_histoExogam2_1_deltaT_gamma_flash_fit.txt"
+  crystal_time_correction: false
+  correction_path: "/home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne/CalFile/ecc.cal"
 
 analysis:
   filename: "ListRun.txt"

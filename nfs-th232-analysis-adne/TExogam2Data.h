@@ -70,8 +70,8 @@ class TExogam2Data : public TObject {
    std::vector<Float_t>		sEXO_GammaZ_Core;
    
    std::vector<Float_t>		fEXO_Neutron_NRJ;
-   std::vector<Float_t>		fDeltaT;       // reversed EXOGAM DeltaT converted to ns
-   std::vector<Float_t>		fNeutronTOF;   // reversed DeltaT plus gamma-flash offset in ns
+   std::vector<Float_t>		fDeltaT;       // EN: NFS Time in ns before neutron-energy conversion; CN: 转换中子能量前的 NFS Time，单位 ns
+   std::vector<Float_t>		fNeutronTOF;   // EN: NFS TOF/Time after global or per-crystal correction; CN: 全局或逐晶体修正后的 NFS TOF/Time
    std::vector<Float_t>		fTime;         // EN: per-crystal analysis Time in ns; CN: 每个 crystal 的分析 Time，单位 ns
 
    // NFS E877-style clover addback / NFS E877 格式 clover 合并

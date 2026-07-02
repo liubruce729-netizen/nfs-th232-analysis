@@ -210,6 +210,8 @@ class TExogam2 : public TDetector {
    bool PSAActive, neutronNFS, NfsSpec, NfsCrystalTimeCorrection;
    bool NfsCrystalTimeCorrectionValid[16*4];
    float NfsCrystalTimeCorrectionOffset[16*4];
+   float NfsCrystalTimeCorrectionGain[16*4];
+   float NfsCrystalTimeCorrectionGain2[16*4];
    float NfsCrystalGammaFlashPeak[16*4];
    float NfsCrystalGammaFlashFwhm[16*4];
    float CloverDistanceMm[16];

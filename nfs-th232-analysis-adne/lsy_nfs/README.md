@@ -67,8 +67,8 @@ Text-file columns:
 clover crystal detector gammaMean_ns gammaFwhm_ns gammaSigma_ns fitStatus entries
 ```
 
-`config.yaml` 中的 `nfs_exo_ana.correction_path` 可以指向这个 `.txt` 文件。  
-`nfs_exo_ana.correction_path` in `config.yaml` can point to this `.txt` file.
+这个 `.txt` 文件用于检查 gamma-flash 拟合质量；当前 ADNE 运行时的 `nfs_exo_ana.correction_path` 应指向 `ecc.cal`。后 64 行时间刻度中，`offset` 是相对全局 gamma-flash offset 的差值，`gain` 是相对 `0.024 ns/channel` 的比例，`gain2` 暂时预留不用。  
+This `.txt` file is used to inspect the gamma-flash fit quality; the current ADNE runtime `nfs_exo_ana.correction_path` should point to `ecc.cal`. In the second block of 64 lines, `offset` is relative to the global gamma-flash offset, `gain` is the ratio to `0.024 ns/channel`, and `gain2` is reserved for now.
 
 主要输出对象：  
 Main output objects:

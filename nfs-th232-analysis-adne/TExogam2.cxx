@@ -45,6 +45,8 @@ TExogam2::TExogam2(bool bspec)
       fNfsCrystalEnergy[i]=NULL;
       NfsCrystalTimeCorrectionValid[i]=false;
       NfsCrystalTimeCorrectionOffset[i]=0.;
+      NfsCrystalTimeCorrectionGain[i]=1.;
+      NfsCrystalTimeCorrectionGain2[i]=0.;
       NfsCrystalGammaFlashPeak[i]=0.;
       NfsCrystalGammaFlashFwhm[i]=0.;
    }
@@ -222,51 +224,70 @@ bool TExogam2::SetNfsCrystalTimeCorrection(bool enable, TString correctionPath){
 	for(Int_t i=0;i<16*4;i++){
 		NfsCrystalTimeCorrectionValid[i]=false;
 		NfsCrystalTimeCorrectionOffset[i]=0.;
+		NfsCrystalTimeCorrectionGain[i]=1.;
+		NfsCrystalTimeCorrectionGain2[i]=0.;
 		NfsCrystalGammaFlashPeak[i]=0.;
 		NfsCrystalGammaFlashFwhm[i]=0.;
 	}
 
 	if(!enable){
-		printf("\033[36mNFS Exogam Info ::  Crystal time correction is disabled; using global gamma-flash offset %.3f ns \033[m \n",GammaFlashOffset);
+		printf("\033[36mNFS Exogam Info ::  Crystal time correction is disabled; using default gain 0.024 ns/channel and global gamma-flash offset %.3f ns \033[m \n",GammaFlashOffset);
 		return true;
 	}
 
 	std::ifstream input(correctionPath.Data());
 	if(!input.is_open()){
-		printf("\033[31mNFS Exogam Alarm ::  Cannot open crystal time correction file %s; using global gamma-flash offset %.3f ns \033[m \n", correctionPath.Data(), GammaFlashOffset);
+		printf("\033[31mNFS Exogam Alarm ::  Cannot open NFS time calibration file %s; using default gain 0.024 ns/channel and global gamma-flash offset %.3f ns \033[m \n", correctionPath.Data(), GammaFlashOffset);
 		NfsCrystalTimeCorrection=false;
 		return false;
 	}
 
-	const Double_t cMeterPerNs = 0.299792458;
+	// EN: Read ecc.cal-style coefficients. The first 64 triples are energy; the next 64 triples are NFS time.
+	//     In the NFS time block: offset is relative to the global gamma-flash offset, gain is a ratio to 0.024 ns/channel, gain2 is reserved.
+	// CN: Read ecc.cal format: the first 64 triples are energy calibration; the next 64 triples are NFS time calibration.
+	//     In the NFS time block, offset is a difference relative to the global gamma-flash offset; gain is the ratio to 0.024 ns/channel; gain2 is reserved.
 	std::string line;
+	Int_t coefficientIndex=0;
 	Int_t loaded=0;
 	while(std::getline(input,line)){
-		if(line.empty() || line[0]=='#')continue;
-		std::istringstream iss(line);
-		Int_t clo=-1, cri=-1, detector=-1, fitStatus=-1;
-		Double_t peakNs=0., fwhmNs=0., sigmaNs=0., entries=0.;
-		if(!(iss >> clo >> cri >> detector >> peakNs >> fwhmNs >> sigmaNs >> fitStatus >> entries))continue;
-		if(clo<0 || clo>=16 || cri<0 || cri>=4)continue;
-		Int_t expectedDetector=clo*4+cri;
-		if(detector!=expectedDetector)detector=expectedDetector;
+		std::string trimmed=line;
+		std::size_t first=trimmed.find_first_not_of(" \t\r\n");
+		if(first==std::string::npos)continue;
+		trimmed=trimmed.substr(first);
+		if(trimmed.rfind("#",0)==0 || trimmed.rfind("//",0)==0)continue;
 
-		Double_t gammaFlightNs=(distanceTOF + CloverDistanceMm[clo]/1000.0)/cMeterPerNs;
-		NfsCrystalTimeCorrectionOffset[detector]=peakNs-gammaFlightNs;
-		NfsCrystalGammaFlashPeak[detector]=peakNs;
-		NfsCrystalGammaFlashFwhm[detector]=fwhmNs;
-		NfsCrystalTimeCorrectionValid[detector]=true;
-		loaded++;
+		std::istringstream iss(trimmed);
+		Double_t offset=0., gain=0., gain2=0.;
+		if(!(iss >> offset >> gain >> gain2))continue;
+
+		if(coefficientIndex>=16*4 && coefficientIndex<2*16*4){
+			Int_t detector=coefficientIndex-16*4;
+			NfsCrystalTimeCorrectionOffset[detector]=offset;
+			NfsCrystalTimeCorrectionGain[detector]=gain;
+			NfsCrystalTimeCorrectionGain2[detector]=gain2;
+			if(offset!=0. || gain!=0.){
+				NfsCrystalTimeCorrectionValid[detector]=true;
+				loaded++;
+			}
+		}
+		coefficientIndex++;
+		if(coefficientIndex>=2*16*4)break;
 	}
 	input.close();
 
-	if(loaded==0){
-		printf("\033[31mNFS Exogam Alarm ::  No valid crystal correction loaded from %s; using global gamma-flash offset %.3f ns \033[m \n", correctionPath.Data(), GammaFlashOffset);
+	if(coefficientIndex<2*16*4){
+		printf("\033[31mNFS Exogam Alarm ::  Time calibration file %s has only %d coefficient lines; expected at least 128 lines. Using default gain 0.024 ns/channel and global gamma-flash offset %.3f ns \033[m \n", correctionPath.Data(), coefficientIndex, GammaFlashOffset);
 		NfsCrystalTimeCorrection=false;
 		return false;
 	}
 
-	printf("\033[36mNFS Exogam Info ::  Loaded %d crystal time corrections from %s \033[m \n",loaded,correctionPath.Data());
+	if(loaded==0){
+		printf("\033[31mNFS Exogam Alarm ::  No valid NFS time coefficients loaded from %s; using default gain 0.024 ns/channel and global gamma-flash offset %.3f ns \033[m \n", correctionPath.Data(), GammaFlashOffset);
+		NfsCrystalTimeCorrection=false;
+		return false;
+	}
+
+	printf("\033[36mNFS Exogam Info ::  Loaded %d NFS crystal time calibrations from %s. Global gamma-flash offset is added; the offset column is relative. \033[m \n",loaded,correctionPath.Data());
 	return true;
 }
 
@@ -1102,12 +1123,25 @@ bool TExogam2::IsMFMExo(MFMExogamFrame *frame)
         
 	rawDeltaT=frame->ExoGetDeltaT();
 	valf2=Cal(rawDeltaT,TCoef[MapFinger][0],TCoef[MapFinger][1],TCoef[MapFinger][2]);
-	deltaTNs=(65536.0-static_cast<Double_t>(rawDeltaT))*0.024;
+	Double_t reversedDeltaT=65536.0-static_cast<Double_t>(rawDeltaT);
+	Bool_t useNfsTimeCal=NfsCrystalTimeCorrection && MapFinger>=0 && MapFinger<16*4 && NfsCrystalTimeCorrectionValid[MapFinger];
+	if(useNfsTimeCal){
+		// EN: NFS ecc.cal time coefficients are relative corrections:
+		//     offset is added to the global gamma-flash offset, gain scales the default 0.024 ns/channel, gain2 is reserved.
+		// CN: NFS ecc.cal time coefficients are relative corrections:
+		//     offset is added to the global gamma-flash offset; gain scales the default 0.024 ns/channel; gain2 is reserved.
+		deltaTNs=reversedDeltaT*0.024*NfsCrystalTimeCorrectionGain[MapFinger]
+		        + GammaFlashOffset
+		        + NfsCrystalTimeCorrectionOffset[MapFinger];
+	}
+	else{
+		deltaTNs=reversedDeltaT*0.024;
+	}
 	
 	//For NFS Only - Time becomes neutron energy - EXOGAM at 5.00 Meters from convertor - time Cal is in ns - neutron mass is 939.5654 MeV/c^2
 	if(neutronNFS){
-		if(NfsCrystalTimeCorrection && MapFinger>=0 && MapFinger<16*4 && NfsCrystalTimeCorrectionValid[MapFinger]){
-			neutronTOF=deltaTNs-NfsCrystalTimeCorrectionOffset[MapFinger]; // per-crystal correction: reversed DeltaT minus fitted offset, in ns
+		if(useNfsTimeCal){
+			neutronTOF=deltaTNs; // EN/CN: relative ecc time correction already includes the global gamma-flash offset.
 		}
 		else{
 			neutronTOF=deltaTNs+GammaFlashOffset; // global correction: reversed DeltaT plus gamma-flash offset, in ns
