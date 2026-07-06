@@ -28,9 +28,20 @@ Examples / 运行例子:
     --out-base /data/out_parallel \
     --input-list ListRun_all.txt
 
+  # CN: 如果脚本不在 ADNE 编译目录里运行，用 --source 指向 ADNE 模板，
+  #     用 --par-dir 指定并行工作目录；不指定 --par-dir 时仍默认放在 source/par_run。
+  # EN: When running outside the compiled ADNE directory, use --source for
+  #     the ADNE template and --par-dir for the parallel work directory.
+  ./prepare_adne_parallel.py \
+    --source /home/e877_ana/Analysis/nfs-th232-analysis-main/nfs-th232-analysis-adne \
+    --par-dir /home/e877_ana/Analysis/nfs-th232-analysis-main/paralle_work/par_run \
+    --jobs 14 \
+    --out-base /home/e877_ana/analysed_data/July6test_lsy/run12 \
+    --input-list RunList_run12.txt
+
   # CN: 准备完成后启动并行；MAX_PARALLEL 可小于 job 数以控制机器负载。
   # EN: Start the generated jobs; MAX_PARALLEL can be smaller than the job count.
-  cd par_run
+  cd /home/e877_ana/Analysis/nfs-th232-analysis-main/paralle_work/par_run
   MAX_PARALLEL=18 ./run_all_parallel.sh
 """
 
@@ -288,7 +299,14 @@ def parse_args() -> argparse.Namespace:
     --out-base /data/out_parallel \
     --input-list ListRun_all.txt
 
-  cd par_run
+  ./prepare_adne_parallel.py \
+    --source /home/e877_ana/Analysis/nfs-th232-analysis-main/nfs-th232-analysis-adne \
+    --par-dir /home/e877_ana/Analysis/nfs-th232-analysis-main/paralle_work/par_run \
+    --jobs 14 \
+    --out-base /home/e877_ana/analysed_data/July6test_lsy/run12 \
+    --input-list RunList_run12.txt
+
+  cd /home/e877_ana/Analysis/nfs-th232-analysis-main/paralle_work/par_run
   MAX_PARALLEL=18 ./run_all_parallel.sh
 """,
     )
@@ -302,6 +320,11 @@ def parse_args() -> argparse.Namespace:
         "--out-base",
         required=True,
         help="base output directory; par_out001... will be created inside it",
+    )
+    parser.add_argument(
+        "--par-dir",
+        default=None,
+        help="parallel work directory; default: <source>/par_run",
     )
     parser.add_argument(
         "--data-target",
@@ -359,7 +382,7 @@ def main() -> int:
 
     data_target = resolve_symlink_target(source_dir, "data", args.data_target)
     out_base = Path(args.out_base).expanduser().resolve()
-    par_dir = source_dir / "par_run"
+    par_dir = Path(args.par_dir).expanduser().resolve() if args.par_dir else source_dir / "par_run"
     par_dir.mkdir(parents=True, exist_ok=True)
     out_base.mkdir(parents=True, exist_ok=True)
 
