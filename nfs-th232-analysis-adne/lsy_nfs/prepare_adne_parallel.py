@@ -137,9 +137,7 @@ def replace_symlink(path: Path, target: Path) -> None:
 
 
 def copy_job_if_needed(source_dir: Path, job_dir: Path) -> None:
-    """CN: 已存在则不重新复制；EN: Do not recopy an existing job directory."""
-    if job_dir.exists():
-        return
+    """CN: 完整 job 已存在则不重新复制；缺可执行文件则补复制。"""
 
     def ignore(_dir: str, names: Iterable[str]) -> set[str]:
         skipped = {
@@ -149,6 +147,14 @@ def copy_job_if_needed(source_dir: Path, job_dir: Path) -> None:
             "data",
         }
         return set(names).intersection(skipped)
+
+    if job_dir.exists():
+        if not job_dir.is_dir():
+            raise SystemExit(f"Job path exists but is not a directory: {job_dir}")
+        if not (job_dir / "AnalysisADNE").exists():
+            print(f"Repair incomplete job directory, missing AnalysisADNE: {job_dir}")
+            shutil.copytree(source_dir, job_dir, symlinks=True, ignore=ignore, dirs_exist_ok=True)
+        return
 
     shutil.copytree(source_dir, job_dir, symlinks=True, ignore=ignore)
 
