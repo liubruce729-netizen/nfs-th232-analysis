@@ -17,7 +17,9 @@ Examples / 运行例子:
     --out-base /data/out_parallel \
     --file-template 'data/run_100_r{n}' \
     --first 1 \
-    --last 180
+    --last 180 \
+    --grusys /home/e877_ana/Analysis/pkg_install/install/GRU \
+    --mfmsys /home/e877_ana/Analysis/pkg_install/install/MFMlib
 
   # CN: 如果已有完整输入列表，也可以直接按列表平均分。
   # EN: An existing full run list can also be split directly.
@@ -38,11 +40,16 @@ import argparse
 import glob
 import os
 import re
+import shlex
 import shutil
 import stat
 import sys
 from pathlib import Path
 from typing import Iterable, List
+
+
+DEFAULT_GRUSYS = "/home/e877_ana/Analysis/pkg_install/install/GRU"
+DEFAULT_MFMSYS = "/home/e877_ana/Analysis/pkg_install/install/MFMlib"
 
 
 def natural_key(text: str) -> list[object]:
@@ -180,6 +187,26 @@ def set_analysis_filename(config_path: Path, runlist_path: Path) -> None:
     config_path.write_text("".join(out), encoding="utf-8")
 
 
+def write_job_runner(job_dir: Path, grusys: str, mfmsys: str) -> None:
+    """Write a job-local wrapper that fixes GRU/MFM runtime libraries."""
+    script = job_dir / "run_adne_env.sh"
+    text = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+# CN: 每个并行 job 都通过这个 wrapper 运行 ADNE，避免系统默认 GRU/MFM 覆盖用户版本。
+# EN: Each parallel job runs ADNE through this wrapper to force the requested GRU/MFM.
+export GRUSYS={shlex.quote(grusys)}
+export MFMSYS={shlex.quote(mfmsys)}
+export LD_LIBRARY_PATH=\"$GRUSYS/lib:$MFMSYS/lib:${{LD_LIBRARY_PATH:-}}\"
+
+ldd ./AnalysisADNE | grep -E 'GRU|MFM|not found'
+exec ./AnalysisADNE \"$@\"
+"""
+    script.write_text(text, encoding="utf-8")
+    mode = script.stat().st_mode
+    script.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def write_run_all_script(par_dir: Path, jobs: int) -> None:
     """Generate a small launcher with bounded parallelism."""
     script = par_dir / "run_all_parallel.sh"
@@ -188,29 +215,29 @@ set -euo pipefail
 
 # CN: 默认同时跑 {jobs} 个任务；可用 MAX_PARALLEL=4 ./run_all_parallel.sh 限制并发数。
 # EN: Runs {jobs} jobs by default; set MAX_PARALLEL=4 to limit concurrency.
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-MANIFEST="$SCRIPT_DIR/jobs.tsv"
-MAX_PARALLEL="${{MAX_PARALLEL:-{jobs}}}"
+SCRIPT_DIR=\"$(cd \"$(dirname \"${{BASH_SOURCE[0]}}\")\" && pwd)\"
+MANIFEST=\"$SCRIPT_DIR/jobs.tsv\"
+MAX_PARALLEL=\"${{MAX_PARALLEL:-{jobs}}}\"
 
-if [[ ! -f "$MANIFEST" ]]; then
-  echo "Missing manifest: $MANIFEST" >&2
+if [[ ! -f \"$MANIFEST\" ]]; then
+  echo \"Missing manifest: $MANIFEST\" >&2
   exit 1
 fi
 
 running=0
 status=0
-tail -n +2 "$MANIFEST" | while IFS=$'\\t' read -r job_id job_dir runlist out_dir nfiles; do
-  if [[ "$nfiles" == "0" ]]; then
-    echo "Skip job $job_id: empty run list"
+tail -n +2 \"$MANIFEST\" | while IFS=$'\\t' read -r job_id job_dir runlist out_dir nfiles; do
+  if [[ \"$nfiles\" == \"0\" ]]; then
+    echo \"Skip job $job_id: empty run list\"
     continue
   fi
 
-  mkdir -p "$out_dir"
-  log="$out_dir/AnalysisADNE.log"
-  echo "Start job $job_id: $job_dir  log=$log"
+  mkdir -p \"$out_dir\"
+  log=\"$out_dir/AnalysisADNE.log\"
+  echo \"Start job $job_id: $job_dir  log=$log\"
   (
-    cd "$job_dir"
-    ./AnalysisADNE > "$log" 2>&1
+    cd \"$job_dir\"
+    ./run_adne_env.sh > \"$log\" 2>&1
   ) &
 
   running=$((running + 1))
@@ -229,7 +256,7 @@ while (( running > 0 )); do
   running=$((running - 1))
 done
 
-exit "$status"
+exit \"$status\"
 """
     script.write_text(text, encoding="utf-8")
     mode = script.stat().st_mode
@@ -246,7 +273,9 @@ def parse_args() -> argparse.Namespace:
     --out-base /data/out_parallel \
     --file-template 'data/run_100_r{n}' \
     --first 1 \
-    --last 180
+    --last 180 \
+    --grusys /home/e877_ana/Analysis/pkg_install/install/GRU \
+    --mfmsys /home/e877_ana/Analysis/pkg_install/install/MFMlib
 
   ./lsy_nfs/prepare_adne_parallel.py \
     --jobs 18 \
@@ -272,6 +301,16 @@ def parse_args() -> argparse.Namespace:
         "--data-target",
         default=None,
         help="target directory for each job's data symlink; default: source/data target",
+    )
+    parser.add_argument(
+        "--grusys",
+        default=DEFAULT_GRUSYS,
+        help=f"GRUSYS path written into each job wrapper, default: {DEFAULT_GRUSYS}",
+    )
+    parser.add_argument(
+        "--mfmsys",
+        default=DEFAULT_MFMSYS,
+        help=f"MFMSYS path written into each job wrapper, default: {DEFAULT_MFMSYS}",
     )
     parser.add_argument(
         "--allow-non-empty-out",
@@ -335,6 +374,7 @@ def main() -> int:
         replace_symlink(job_dir / "data", data_target)
         replace_symlink(job_dir / "out", out_dir)
         set_analysis_filename(job_dir / "Yaml_config_files" / "config.yaml", runlist)
+        write_job_runner(job_dir, args.grusys, args.mfmsys)
 
         manifest_lines.append(
             f"{index}\t{job_dir}\t{runlist}\t{out_dir}\t{len(chunk)}\n"
@@ -348,6 +388,8 @@ def main() -> int:
     print(f"Parallel directory:    {par_dir}")
     print(f"Data target:           {data_target}")
     print(f"Output base:           {out_base}")
+    print(f"GRUSYS:                {args.grusys}")
+    print(f"MFMSYS:                {args.mfmsys}")
     print(f"Input files:           {len(files)}")
     print(f"Jobs:                  {args.jobs}")
     if empty_jobs:
