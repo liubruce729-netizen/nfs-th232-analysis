@@ -3,6 +3,22 @@
 
 CN: 合并 par_outXXX 里的两个 tree ROOT 文件组和一个 NFS histo 文件组。
 EN: Merge two tree ROOT groups and one NFS histogram ROOT group from par_outXXX.
+
+Examples / 运行例子:
+  # CN: 合并 prepare_adne_parallel.py 生成的 par_out001...par_out018。
+  # EN: Merge par_out001...par_out018 produced by prepare_adne_parallel.py.
+  ./lsy_nfs/merge_adne_parallel_outputs.py \
+    --out-base /data/out_parallel \
+    --force
+
+  # CN: 自定义合并后的文件名。
+  # EN: Use custom merged output names.
+  ./lsy_nfs/merge_adne_parallel_outputs.py \
+    --out-base /data/out_parallel \
+    --nfs-tree-name nfs_tree_all.root \
+    --mult3-tree-name mult3_nfs_tree_all.root \
+    --histo-name nfs_histoExogam2_all.root \
+    --force
 """
 
 from __future__ import annotations
@@ -37,7 +53,20 @@ def run_hadd(output: Path, inputs: list[Path], force: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Merge parallel ADNE outputs / 合并 ADNE 并行输出"
+        description="Merge parallel ADNE outputs / 合并 ADNE 并行输出",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=r"""Examples / 运行例子:
+  ./lsy_nfs/merge_adne_parallel_outputs.py \
+    --out-base /data/out_parallel \
+    --force
+
+  ./lsy_nfs/merge_adne_parallel_outputs.py \
+    --out-base /data/out_parallel \
+    --nfs-tree-name nfs_tree_all.root \
+    --mult3-tree-name mult3_nfs_tree_all.root \
+    --histo-name nfs_histoExogam2_all.root \
+    --force
+""",
     )
     parser.add_argument(
         "--out-base",

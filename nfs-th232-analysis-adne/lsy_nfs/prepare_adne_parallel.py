@@ -6,6 +6,30 @@ CN: 这个脚本把一个已经编译好的 ADNE 目录复制成多个独立 job
 EN: This script clones a compiled ADNE directory into independent job
     directories. Each job gets its own run list and output symlink, while
     sharing the same read-only data symlink target.
+
+Examples / 运行例子:
+  # CN: 在已经编译好的 ADNE 目录中运行；把 data/run_100_r1 到 data/run_100_r180
+  #     平均分成 18 份，输出到 /data/out_parallel/par_out001...
+  # EN: Run inside a compiled ADNE directory; split data/run_100_r1 to
+  #     data/run_100_r180 into 18 jobs, writing to par_out001...
+  ./lsy_nfs/prepare_adne_parallel.py \
+    --jobs 18 \
+    --out-base /data/out_parallel \
+    --file-template 'data/run_100_r{n}' \
+    --first 1 \
+    --last 180
+
+  # CN: 如果已有完整输入列表，也可以直接按列表平均分。
+  # EN: An existing full run list can also be split directly.
+  ./lsy_nfs/prepare_adne_parallel.py \
+    --jobs 18 \
+    --out-base /data/out_parallel \
+    --input-list ListRun_all.txt
+
+  # CN: 准备完成后启动并行；MAX_PARALLEL 可小于 job 数以控制机器负载。
+  # EN: Start the generated jobs; MAX_PARALLEL can be smaller than the job count.
+  cd par_run
+  MAX_PARALLEL=18 ./run_all_parallel.sh
 """
 
 from __future__ import annotations
@@ -214,7 +238,24 @@ exit "$status"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepare parallel ADNE job directories / 准备 ADNE 并行任务目录"
+        description="Prepare parallel ADNE job directories / 准备 ADNE 并行任务目录",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=r"""Examples / 运行例子:
+  ./lsy_nfs/prepare_adne_parallel.py \
+    --jobs 18 \
+    --out-base /data/out_parallel \
+    --file-template 'data/run_100_r{n}' \
+    --first 1 \
+    --last 180
+
+  ./lsy_nfs/prepare_adne_parallel.py \
+    --jobs 18 \
+    --out-base /data/out_parallel \
+    --input-list ListRun_all.txt
+
+  cd par_run
+  MAX_PARALLEL=18 ./run_all_parallel.sh
+""",
     )
     parser.add_argument(
         "--source",
