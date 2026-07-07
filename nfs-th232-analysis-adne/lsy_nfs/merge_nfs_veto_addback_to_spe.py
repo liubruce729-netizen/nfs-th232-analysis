@@ -4,13 +4,16 @@
 CN:
   递归遍历一个输出目录下的子目录，寻找 nfs_histoExogam2_1.root，
   提取所有 nfs_cloverX_addback_gamma_bgo_csi_veto 一维谱，并合并成一个总谱。
-  如果提供 --spe-tool，则调用已有 root_hist_to_spe.py 把总谱转为 RadWare .spe。
+  如果提供 --spe-tool，则调用已有 SPE 转换工具把总谱转为 RadWare .spe。
+  优先兼容 bg_processing/tools/root_projection.py 的 spe 子命令格式；
+  同时保留 root_hist_to_spe.py 的旧命令行格式。
 
 EN:
   Recursively scan an output directory for nfs_histoExogam2_1.root files,
   sum all nfs_cloverX_addback_gamma_bgo_csi_veto TH1 spectra into one
-  total spectrum, and optionally convert it to RadWare .spe using the
-  existing root_hist_to_spe.py helper.
+  total spectrum, and optionally convert it to RadWare .spe. The preferred
+  converter is bg_processing/tools/root_projection.py with its spe subcommand;
+  the older root_hist_to_spe.py command-line format is also supported.
 
 Examples / 运行例子:
   # CN: 只生成合并后的 ROOT 文件。
@@ -18,20 +21,19 @@ Examples / 运行例子:
   ./merge_nfs_veto_addback_to_spe.py \
     --input-dir /home/e877_ana/analysed_data/July6test_lsy/run12
 
-  # CN: 同时转成 .spe；--spe-tool 换成你的实际工具路径。
-  # EN: Also convert to .spe; replace --spe-tool with the real helper path.
+  # CN: 同时转成 .spe；--spe-tool 指向 bg_processing/tools/root_projection.py。
+  # EN: Also convert to .spe; --spe-tool points to bg_processing/tools/root_projection.py.
   ./merge_nfs_veto_addback_to_spe.py \
     --input-dir /home/e877_ana/analysed_data/July6test_lsy/run12 \
     --output-root /home/e877_ana/analysed_data/July6test_lsy/run12/run12_veto_addback_sum.root \
     --output-spe /home/e877_ana/analysed_data/July6test_lsy/run12/run12_veto_addback_sum.spe \
-    --spe-tool /path/to/root_hist_to_spe.py
+    --spe-tool /path/to/bg_processing/tools/root_projection.py
 """
 
 from __future__ import annotations
 
 import argparse
 import fnmatch
-import os
 import re
 import subprocess
 import sys
@@ -149,9 +151,35 @@ def write_output_root(output_root: Path, hist, summary_lines: list[str]) -> None
 
 
 def run_spe_converter(spe_tool: Path, output_root: Path, output_spe: Path, spe_name: str) -> None:
-    """Call root_hist_to_spe.py-style converter."""
+    """Call a supported ROOT-histogram to SPE converter.
+
+    CN:
+      - bg_processing/tools/root_projection.py 使用 spe 子命令：
+        root_projection.py spe -i input.root -n hist -o output.spe --spe_name NAME。
+      - 旧的 root_hist_to_spe.py 使用命令行参数 -i/-n/-o/--spe-name。
+
+    EN:
+      - bg_processing/tools/root_projection.py uses the spe subcommand:
+        root_projection.py spe -i input.root -n hist -o output.spe --spe_name NAME.
+      - The older root_hist_to_spe.py uses -i/-n/-o/--spe-name arguments.
+    """
     output_spe.parent.mkdir(parents=True, exist_ok=True)
-    if spe_tool.suffix == ".py":
+
+    if spe_tool.name == "root_projection.py":
+        cmd = [
+            sys.executable,
+            str(spe_tool),
+            "spe",
+            "-i",
+            str(output_root),
+            "-n",
+            MERGED_HIST_NAME,
+            "-o",
+            str(output_spe),
+            "--spe_name",
+            spe_name,
+        ]
+    elif spe_tool.suffix == ".py":
         cmd = [
             sys.executable,
             str(spe_tool),
@@ -209,7 +237,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--spe-tool",
-        help="path to root_hist_to_spe.py or compatible converter; omit to skip SPE output",
+        help="path to bg_processing/tools/root_projection.py, root_hist_to_spe.py, or compatible converter; omit to skip SPE output",
     )
     parser.add_argument(
         "--spe-name",
