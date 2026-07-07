@@ -4,12 +4,14 @@
 // Usage / 用法:
 //   root -l -b -q 'lsy_nfs/fission_event_ana.C("out/mult3_nfs_run_100_r0.root",8.6,20,"2,4,7,12,20,30,50")'
 //   root -l -b -q 'lsy_nfs/fission_event_ana.C("out/mult3_nfs_run_100_r0.root,out/mult3_nfs_run_100_r1.root",8.6,20,"2,4,7,12,20,30,50","out/fission_event_ana.root")'
+//   root -l -b -q 'lsy_nfs/fission_event_ana.C("@out/mult3_filelist.txt",8.6,20,"2,4,7,12,20,30,50","out/fission_event_ana.root")'
 //
 // EN: The macro reads f_E877_Clover_* split branches from TreeMaster.
 // CN: 该宏读取 TreeMaster 中的 f_E877_Clover_* 拆分分支。
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -60,10 +62,38 @@ double ToFNsToEnergyMeV(double tofNs, double distanceMeter)
   return 0.5 * kNeutronMassMeV * beta * beta;
 }
 
+std::vector<TString> ReadFileList(const TString &listPath)
+{
+  // EN: For long runs, pass inputFiles as "@filelist.txt" to avoid an overlong ROOT command line.
+  // CN: 长任务文件很多时，用 "@filelist.txt" 传入，避免 ROOT 命令行过长。
+  std::vector<TString> items;
+  std::ifstream input(listPath.Data());
+  if (!input.is_open()) {
+    std::cerr << "Cannot open fission input list: " << listPath << std::endl;
+    return items;
+  }
+
+  std::string line;
+  while (std::getline(input, line)) {
+    TString item(line.c_str());
+    item = item.Strip(TString::kBoth);
+    if (item.IsNull() || item.BeginsWith("#") || item.BeginsWith("//")) continue;
+    items.push_back(item);
+  }
+  return items;
+}
+
 std::vector<TString> SplitCsv(const char *text)
 {
   std::vector<TString> items;
   TString input(text ? text : "");
+  input = input.Strip(TString::kBoth);
+  if (input.BeginsWith("@")) {
+    TString listPath = input(1, input.Length() - 1);
+    listPath = listPath.Strip(TString::kBoth);
+    return ReadFileList(listPath);
+  }
+
   TObjArray *tokens = input.Tokenize(",");
   for (int i = 0; i < tokens->GetEntriesFast(); ++i) {
     TString item = static_cast<TObjString *>(tokens->At(i))->GetString();
