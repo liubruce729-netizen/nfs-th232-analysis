@@ -24,6 +24,9 @@ ROOT TH1 spectrum
 - `scripts/plot_efficiency_fit.py`
   - 中文：把 `.sin` 效率点和 `.aef` 拟合曲线画在一起，用来检查拟合。
   - English: Plot `.sin` efficiency points together with `.aef` fitted curves.
+- `scripts/merge_sto_sou_to_sin.py`
+  - 中文：按 RadWare SOURCE 规则，把 GF3 `.sto` 和标准源 `.sou` 合并成 EFFIT `.sin`。
+  - English: Merge GF3 `.sto` and source `.sou` into EFFIT `.sin`, following RadWare SOURCE behavior.
 - `examples/eu152.sou`
   - 中文：Eu-152 标准源能量和相对强度表，GF3 手动拟合后整理 `.sin` 时使用。
   - English: Eu-152 source energy/intensity table used when preparing `.sin` after manual GF3 fits.
@@ -50,6 +53,12 @@ PyROOT
 
 ```bash
 python3 -c "import ROOT; print(ROOT.__version__)"
+```
+
+`merge_sto_sou_to_sin.py`:
+
+```text
+Python 3 标准库 / Python 3 standard library
 ```
 
 `plot_efficiency_fit.py`:
@@ -137,6 +146,22 @@ Fit each peak by hand, store accepted peaks with `SA`, write `gf3.sto` with `SA 
 ```text
 docs/manual_gf3_sto_to_sin_workflow.md
 ```
+
+## 生成 SIN / Build SIN
+
+手动拟合后，用脚本把 `gf3.sto` 和 `Eu152.sou` 合并成 `Eu152.sin`：  
+After manual fits, merge `gf3.sto` and `Eu152.sou` into `Eu152.sin`:
+
+```bash
+python3 scripts/merge_sto_sou_to_sin.py \
+  --sto gf3.sto \
+  --sou Eu152.sou \
+  --out Eu152.sin \
+  --title "Manual GF3 fit, gf3.sto + Eu152.sou"
+```
+
+这个脚本按官方 RadWare `SOURCE` 程序的列顺序输出 `.sin`。  
+The script writes `.sin` using the same column order as RadWare `SOURCE`.
 
 ## EFFIT
 

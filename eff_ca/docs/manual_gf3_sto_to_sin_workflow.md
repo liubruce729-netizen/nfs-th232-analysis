@@ -160,9 +160,19 @@ Eu152.sou
 gf3.sto
 ```
 
-## 5. 手动把 gf3.sto 整理成 Eu152.sin
+## 5. 把 gf3.sto 和 Eu152.sou 合并成 Eu152.sin
 
-EFFIT 需要 `.sin` 文件。`.sin` 的每一行把实验拟合结果和标准源信息放在一起。
+EFFIT 需要 `.sin` 文件。现在推荐用脚本合并，避免手工复制错列：
+
+```bash
+python3 scripts/merge_sto_sou_to_sin.py \
+  --sto gf3.sto \
+  --sou Eu152.sou \
+  --out Eu152.sin \
+  --title "Manual GF3 fit, gf3.sto + Eu152.sou"
+```
+
+这个脚本完全按 RadWare `SOURCE` 程序的规则逐行合并。`.sin` 的每一行把实验拟合结果和标准源信息放在一起。
 
 推荐 `.sin` 行格式：
 
