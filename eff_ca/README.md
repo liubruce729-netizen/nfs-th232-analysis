@@ -3,14 +3,15 @@
 `eff_ca` 是一个 RadWare 效率标定流程包，用 Eu-152 标准源谱生成探测器效率曲线。  
 `eff_ca` is a RadWare efficiency-calibration workflow package for building detector efficiency curves from Eu-152 source spectra.
 
-默认输入是 ROOT 文件中的一维 TH1 直方图。  
-The expected input is a one-dimensional ROOT TH1 histogram.
+默认输入是 ROOT 文件中的一维 TH1 直方图。正式效率曲线推荐用 GF3 手动逐峰拟合，而不是直接依赖 `CA/AUTOCAL`。  
+The expected input is a one-dimensional ROOT TH1 histogram. For the final efficiency curve, manual GF3 peak fitting is preferred over direct `CA/AUTOCAL` output.
 
 ```text
 ROOT TH1 spectrum
   -> RadWare .spe
-  -> GF3 CA/AUTOCAL with Eu-152 .sou
-  -> Eu152.sin
+  -> GF3 manual peak fitting
+  -> gf3.sto
+  -> manually prepared Eu152.sin
   -> EFFIT
   -> .aef efficiency-parameter file
 ```
@@ -24,14 +25,17 @@ ROOT TH1 spectrum
   - 中文：把 `.sin` 效率点和 `.aef` 拟合曲线画在一起，用来检查拟合。
   - English: Plot `.sin` efficiency points together with `.aef` fitted curves.
 - `examples/eu152.sou`
-  - 中文：Eu-152 标准源能量和相对强度表，GF3 `CA` 使用。
-  - English: Eu-152 source energy/intensity table used by GF3 `CA`.
+  - 中文：Eu-152 标准源能量和相对强度表，GF3 手动拟合后整理 `.sin` 时使用。
+  - English: Eu-152 source energy/intensity table used when preparing `.sin` after manual GF3 fits.
+- `docs/manual_gf3_sto_to_sin_workflow.md`
+  - 中文：推荐流程，GF3 手动逐峰拟合、`SA` 保存、`gf3.sto` 整理成 `.sin`、再用 EFFIT。
+  - English: Recommended workflow using manual GF3 peak fits, `SA`, `gf3.sto`, manual `.sin`, and EFFIT.
 - `docs/efficiency_ca_workflow.md`
-  - 中文：完整中文流程、命令、输入输出解释和当前 RadWare 注意事项。
-  - English: Detailed Chinese workflow notes, command transcript, and file-format interpretation.
+  - 中文：早期 CA/AUTOCAL 流程记录和输入输出解释，保留作参考。
+  - English: Earlier CA/AUTOCAL workflow notes kept as a reference.
 
-默认不提交 `.root/.spe/.sin/.aef/.png` 等数据或结果文件。  
-ROOT/SPE/SIN/AEF/PNG data products are ignored by default.
+默认不提交 `.root/.spe/.sin/.sto/.aef/.png` 等数据或结果文件。  
+ROOT/SPE/SIN/STO/AEF/PNG data products are ignored by default.
 
 ## 依赖 / Requirements
 
@@ -95,7 +99,7 @@ python3 scripts/root_hist_to_spe.py \
 如果 ROOT 里的直方图在目录中，例如 `dir/hEu152`，`-n` 直接写完整路径。  
 If the histogram is inside a ROOT directory, for example `dir/hEu152`, pass the full path to `-n`.
 
-## GF3 CA/AUTOCAL
+## GF3 手动拟合 / Manual GF3 Fits
 
 运行 GF3：  
 Run GF3:
@@ -105,16 +109,34 @@ source /home/user0/radware.sh
 gf3
 ```
 
-GF3 中输入 / Inside GF3:
+GF3 中的基本循环 / Basic loop inside GF3:
 
 ```text
 SP Eu152
-CA
-eu152
+DS
+EX
+FT 1
+SA
+1
 ```
 
-这会读取 `Eu152.spe` 和 `eu152.sou`，自动寻峰、积分，并生成 `Eu152.sin`。  
-This reads `Eu152.spe` and `eu152.sou`, integrates matched source peaks, and writes `Eu152.sin`.
+逐个峰手动选区、拟合，拟合满意后用 `SA` 保存到同一个数据组。全部峰保存后：
+
+```text
+SA -1
+```
+
+这会写出 `gf3.sto`。然后把 `gf3.sto` 中的 centroid/area 和 `eu152.sou` 中的标准能量/强度手动合并成 `Eu152.sin`。  
+Fit each peak by hand, store accepted peaks with `SA`, write `gf3.sto` with `SA -1`, and manually combine `gf3.sto` with `eu152.sou` to prepare `Eu152.sin`.
+
+`CA/AUTOCAL` 只建议作为快速检查，不建议作为正式效率曲线的默认流程。  
+`CA/AUTOCAL` is useful for a quick check, but manual fits are preferred for the final efficiency curve.
+
+详细步骤见 / Detailed steps:
+
+```text
+docs/manual_gf3_sto_to_sin_workflow.md
+```
 
 ## EFFIT
 
@@ -165,16 +187,19 @@ python3 scripts/plot_efficiency_fit.py \
 - `.sou`
   - 中文：标准源表，包含 gamma 能量、能量误差、相对强度、强度误差。
   - English: Source table with gamma energy, energy error, relative intensity, and intensity error.
+- `.sto`
+  - 中文：GF3 `SA -1` 写出的手动拟合结果，包含已保存峰的 centroid 和 area。
+  - English: Manual GF3 fit results written by `SA -1`, containing stored centroids and areas.
 - `.sin`
-  - 中文：GF3 `CA` 的输出，合并实验峰面积和 `.sou` 标准源信息。
-  - English: GF3 `CA` output combining measured peak areas with `.sou` source data.
+  - 中文：EFFIT 输入文件，手动合并 `.sto` 的实验面积和 `.sou` 的标准源信息。
+  - English: EFFIT input file prepared by combining measured areas from `.sto` with source data from `.sou`.
 - `.aef`
   - 中文：EFFIT 输出的效率曲线参数，顺序为 `A B C D E F G E1 E2 deff_log`。
   - English: EFFIT efficiency parameters in the order `A B C D E F G E1 E2 deff_log`.
 
-完整中文说明见：  
-Full Chinese workflow notes:
+完整中文推荐流程见：  
+Recommended Chinese workflow:
 
 ```text
-docs/efficiency_ca_workflow.md
+docs/manual_gf3_sto_to_sin_workflow.md
 ```
