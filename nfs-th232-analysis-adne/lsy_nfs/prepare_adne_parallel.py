@@ -243,7 +243,14 @@ fi
 
 running=0
 status=0
-tail -n +2 \"$MANIFEST\" | while IFS=$'\\t' read -r job_id job_dir runlist out_dir nfiles; do
+
+# CN: 不要用 `tail ... | while ...`；管道会让 while 在子 shell 中运行，
+#     后台 ADNE 进程可能不再被本脚本的最终 wait 等待。
+# EN: Do not use `tail ... | while ...`; the pipe runs the loop in a subshell,
+#     so the final wait in this launcher may miss still-running ADNE jobs.
+exec 3< \"$MANIFEST\"
+read -r _header <&3
+while IFS=$'\\t' read -r job_id job_dir runlist out_dir nfiles <&3; do
   if [[ \"$nfiles\" == \"0\" ]]; then
     echo \"Skip job $job_id: empty run list\"
     continue
@@ -265,6 +272,7 @@ tail -n +2 \"$MANIFEST\" | while IFS=$'\\t' read -r job_id job_dir runlist out_d
     running=$((running - 1))
   fi
 done
+exec 3<&-
 
 while (( running > 0 )); do
   if ! wait -n; then
