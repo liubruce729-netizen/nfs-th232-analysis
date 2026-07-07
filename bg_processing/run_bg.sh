@@ -18,13 +18,17 @@ SNIP_Mmax=9
 SNIP_Medge=2500
 
 # ===== 输入 ROOT 和 histogram 名称 =====
-# 新环境可直接改下面两个默认值，也可以运行时覆盖：
+# INPUT_HIST_PATH 是 ROOT 文件中的完整对象路径；如果 TBrowser 里先进入目录再看到图，写成 folder/EE_T。
+# INPUT_HIST 是输出文件里的基础 histogram 名，默认自动取 INPUT_HIST_PATH 的最后一段。
+# 新环境可直接改下面默认值，也可以运行时覆盖：
 #   INPUT_ROOT=/path/to/input.root INPUT_HIST=EE_T bash run_bg.sh all
+#   INPUT_ROOT=/path/to/input.root INPUT_HIST=folder/EE_T bash run_bg.sh all
 INPUT_ROOT="${INPUT_ROOT:-big_win_th.root}"
-INPUT_HIST="${INPUT_HIST:-EE_T}"
+INPUT_HIST_PATH="${INPUT_HIST_PATH:-${INPUT_HIST:-EE_T}}"
+INPUT_HIST="${INPUT_HIST_NAME:-${INPUT_HIST_PATH##*/}}"
 
-# ===== 由 INPUT_HIST 派生的 histogram 名称 =====
-# 只要 INPUT_HIST 改了，后续 *_sig1、*_sig 等名字会自动跟着变。
+# ===== 由基础 histogram 名称派生的输出 histogram 名称 =====
+# INPUT_HIST_PATH 用于读取原始 ROOT；INPUT_HIST 用于当前流程生成的新 ROOT 对象名。
 RAD_SIG_HIST="${INPUT_HIST}_sig1"
 RAD_BG_HIST="${INPUT_HIST}_bg1"
 SNIP_SIG_HIST="${INPUT_HIST}_sig"
@@ -62,7 +66,7 @@ run_rad_origin() {
   # 1) 从二维矩阵得到 normal-bin ProjectionX。
   #    root_projection.py 已显式使用 Y bins 1..N，不包含 ROOT underflow/overflow。
   python3 "${TOOLSDIR}/root_projection.py" project \
-    -i "${INPUT_ROOT}" -n "${INPUT_HIST}" -o "${RAD_RE_ROOT}" -p S_proj
+    -i "${INPUT_ROOT}" -n "${INPUT_HIST_PATH}" -o "${RAD_RE_ROOT}" -p S_proj
 
   # 2) 从 S_proj 估计一维本底 S_proj_bg。
   python3 "${TOOLSDIR}/root_projection.py" background \
@@ -104,7 +108,7 @@ run_save_rad_m4b() {
   root -l -q -b "${TOOLSDIR}/save2m4b.C(\"${RAD_RE_ROOT}\",\"S_proj_bg2D\",\"${RAD_BG_M4B}\")" | tee save_radbg.log
   [[ -f "${RAD_BG_M4B}" ]] || { echo "ERROR: 未生成 ${RAD_BG_M4B}"; exit 2; }
 
-  root -l -q -b "${TOOLSDIR}/save2m4b.C(\"${INPUT_ROOT}\",\"${INPUT_HIST}\",\"${FINAL_MAT_WIN80_RAD_M4B}\")" | tee save_win80rad.log
+  root -l -q -b "${TOOLSDIR}/save2m4b.C(\"${INPUT_ROOT}\",\"${INPUT_HIST_PATH}\",\"${FINAL_MAT_WIN80_RAD_M4B}\")" | tee save_win80rad.log
   [[ -f "${FINAL_MAT_WIN80_RAD_M4B}" ]] || { echo "ERROR: 未生成 ${FINAL_MAT_WIN80_RAD_M4B}"; exit 3; }
 }
 
@@ -113,7 +117,7 @@ run_snip() {
 
   # bg_sub_SY_v2.py 通常输出 ${SNIP_BG_HIST} 和 ${SNIP_SIG_HIST}。
   python3 "${TOOLSDIR}/bg_sub_SY_v2.py" \
-    -i "${INPUT_ROOT}" -n "${INPUT_HIST}" -o "${SNIP_ROOT}" \
+    -i "${INPUT_ROOT}" -n "${INPUT_HIST_PATH}" -o "${SNIP_ROOT}" \
     -r second -m "${SNIP_M}" -s decreasing
 
   # 如需启用 skew，可在这里恢复 skew_edge.py；输出前缀也从 INPUT_HIST 派生。
@@ -149,6 +153,7 @@ run_save_final() {
 print_summary() {
   echo "== 完成（输出均在当前工作目录） =="
   echo "  INPUT_ROOT=${INPUT_ROOT}"
+  echo "  INPUT_HIST_PATH=${INPUT_HIST_PATH}"
   echo "  INPUT_HIST=${INPUT_HIST}"
   echo "  rad signal hist: ${RAD_SIG_HIST}"
   echo "  snip signal hist: ${SNIP_SIG_HIST}"

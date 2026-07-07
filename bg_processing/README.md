@@ -43,7 +43,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLSDIR="${TOOLSDIR:-${SCRIPT_DIR}/tools}"
 
 INPUT_ROOT="${INPUT_ROOT:-big_win_th.root}"
-INPUT_HIST="${INPUT_HIST:-EE_T}"
+INPUT_HIST_PATH="${INPUT_HIST_PATH:-${INPUT_HIST:-EE_T}}"
+INPUT_HIST="${INPUT_HIST_NAME:-${INPUT_HIST_PATH##*/}}"
 ```
 
 如果保持 `tools/` 和脚本在同一个目录，`TOOLSDIR` 不需要改。
@@ -61,6 +62,14 @@ mkdir -p /path/to/output_dir
 cd /path/to/output_dir
 INPUT_ROOT=/path/to/input.root INPUT_HIST=EE_T bash /path/to/bg_processing/run_bg.sh all
 ```
+
+如果 TBrowser 打开 ROOT 后先看到目录，histogram 在目录里面，例如 `folder/EE_T`，就把完整对象路径传给 `INPUT_HIST`：
+
+```bash
+INPUT_ROOT=/path/to/input.root INPUT_HIST=folder/EE_T bash /path/to/bg_processing/run_bg.sh all
+```
+
+脚本会用 `folder/EE_T` 读取原始 ROOT，但输出 ROOT 中的新对象仍使用基础名 `EE_T` 派生，例如 `EE_T_sig1`、`EE_T_sig`。
 
 ## run_bg.sh 流程
 

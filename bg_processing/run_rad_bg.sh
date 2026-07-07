@@ -13,12 +13,17 @@ W=3
 skew_W=3
 
 # ===== 输入 ROOT 和 histogram 名称 =====
-# 新环境可直接改下面两个默认值，也可以运行时覆盖：
+# INPUT_HIST_PATH 是 ROOT 文件中的完整对象路径；如果 TBrowser 里先进入目录再看到图，写成 folder/EE_T。
+# INPUT_HIST 是输出文件里的基础 histogram 名，默认自动取 INPUT_HIST_PATH 的最后一段。
+# 新环境可直接改下面默认值，也可以运行时覆盖：
 #   INPUT_ROOT=/path/to/input.root INPUT_HIST=EE_T bash run_rad_bg.sh all
+#   INPUT_ROOT=/path/to/input.root INPUT_HIST=folder/EE_T bash run_rad_bg.sh all
 INPUT_ROOT="${INPUT_ROOT:-big_win_th.root}"
-INPUT_HIST="${INPUT_HIST:-EE_T}"
+INPUT_HIST_PATH="${INPUT_HIST_PATH:-${INPUT_HIST:-EE_T}}"
+INPUT_HIST="${INPUT_HIST_NAME:-${INPUT_HIST_PATH##*/}}"
 
-# ===== 由 INPUT_HIST 派生的 histogram 名称 =====
+# ===== 由基础 histogram 名称派生的输出 histogram 名称 =====
+# INPUT_HIST_PATH 用于读取原始 ROOT；INPUT_HIST 用于当前流程生成的新 ROOT 对象名。
 # subtract2D 使用 suffix _sig1，因此 rad 信号名是 ${INPUT_HIST}_sig1。
 # skew_edge.py 的 -o 是输出前缀，会写出 ${DESKEW_PREFIX}_skew 和 ${DESKEW_PREFIX}_no_skew。
 RAD_SIG_HIST="${INPUT_HIST}_sig1"
@@ -55,7 +60,7 @@ run_rad_origin() {
 
   # 1) 得到 normal-bin 投影 S_proj，不包含 ROOT underflow/overflow。
   python3 "${TOOLSDIR}/root_projection.py" project \
-    -i "${INPUT_ROOT}" -n "${INPUT_HIST}" -o "${RAD_RE_ROOT}" -p S_proj
+    -i "${INPUT_ROOT}" -n "${INPUT_HIST_PATH}" -o "${RAD_RE_ROOT}" -p S_proj
 
   # 2) 得到一维本底 S_proj_bg。
   python3 "${TOOLSDIR}/root_projection.py" background \
@@ -96,7 +101,7 @@ run_save_rad_m4b() {
   root -l -q -b "${TOOLSDIR}/save2m4b.C(\"${RAD_RE_ROOT}\",\"S_proj_bg2D\",\"${RAD_BG_M4B}\")" | tee save_radbg.log
   [[ -f "${RAD_BG_M4B}" ]] || { echo "ERROR: 未生成 ${RAD_BG_M4B}"; exit 2; }
 
-  root -l -q -b "${TOOLSDIR}/save2m4b.C(\"${INPUT_ROOT}\",\"${INPUT_HIST}\",\"${FINAL_MAT_WIN80_RAD_M4B}\")" | tee save_win80rad.log
+  root -l -q -b "${TOOLSDIR}/save2m4b.C(\"${INPUT_ROOT}\",\"${INPUT_HIST_PATH}\",\"${FINAL_MAT_WIN80_RAD_M4B}\")" | tee save_win80rad.log
   [[ -f "${FINAL_MAT_WIN80_RAD_M4B}" ]] || { echo "ERROR: 未生成 ${FINAL_MAT_WIN80_RAD_M4B}"; exit 3; }
 }
 
@@ -137,6 +142,7 @@ run_save_final() {
 print_summary() {
   echo "== 完成（输出均在当前工作目录） =="
   echo "  INPUT_ROOT=${INPUT_ROOT}"
+  echo "  INPUT_HIST_PATH=${INPUT_HIST_PATH}"
   echo "  INPUT_HIST=${INPUT_HIST}"
   echo "  rad signal hist: ${RAD_SIG_HIST}"
   echo "  deskew signal hist: ${DESKEW_SIG_HIST}"

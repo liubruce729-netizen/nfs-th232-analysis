@@ -65,6 +65,7 @@ bg_subtraction_xyzdiag.py
 
 import argparse
 import warnings
+from pathlib import Path
 import numpy as np
 import ROOT
 
@@ -260,8 +261,9 @@ def main():
     if not fout or fout.IsZombie():
         raise RuntimeError(f"无法创建输出文件: {args.output}")
 
-    h_bg = array_to_root_hist(bg, h2, args.histname + '_bg')
-    h_sig = array_to_root_hist(sig, h2, args.histname + '_sig')
+    hist_base = Path(args.histname).name
+    h_bg = array_to_root_hist(bg, h2, hist_base + '_bg')
+    h_sig = array_to_root_hist(sig, h2, hist_base + '_sig')
 
     h_bg.Write()
     h_sig.Write()

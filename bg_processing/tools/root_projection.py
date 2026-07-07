@@ -31,8 +31,9 @@ def copy_and_project(input_file: str,
         f_in.Close()
         raise RuntimeError(f"Cannot create output file '{output_file}'")
 
-    h2_clone = h2.Clone(hist2d_name)
-    f_out.WriteObject(h2_clone, hist2d_name)
+    output_hist_name = Path(hist2d_name).name
+    h2_clone = h2.Clone(output_hist_name)
+    f_out.WriteObject(h2_clone, output_hist_name)
 
     if axis.upper() == 'X':
         h1 = h2.ProjectionX(proj_name, 1, h2.GetNbinsY())
