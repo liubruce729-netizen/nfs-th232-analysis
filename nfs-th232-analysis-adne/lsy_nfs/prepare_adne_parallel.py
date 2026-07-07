@@ -241,8 +241,30 @@ if [[ ! -f \"$MANIFEST\" ]]; then
   exit 1
 fi
 
-running=0
 status=0
+pids=()
+
+wait_for_one_job() {{
+  local done_pid=\"\"
+  if (( ${{#pids[@]}} == 0 )); then
+    return
+  fi
+
+  # CN: 只等待本 launcher 记录的 ADNE PID，避免多个窗口/多个脚本互相等待。
+  # EN: Wait only for ADNE PIDs started by this launcher, so parallel windows stay independent.
+  if ! wait -n -p done_pid \"${{pids[@]}}\"; then
+    status=1
+  fi
+
+  local kept=()
+  local pid
+  for pid in \"${{pids[@]}}\"; do
+    if [[ -z \"$done_pid\" || \"$pid\" != \"$done_pid\" ]]; then
+      kept+=(\"$pid\")
+    fi
+  done
+  pids=(\"${{kept[@]}}\")
+}}
 
 # CN: 不要用 `tail ... | while ...`；管道会让 while 在子 shell 中运行，
 #     后台 ADNE 进程可能不再被本脚本的最终 wait 等待。
@@ -263,22 +285,16 @@ while IFS=$'\\t' read -r job_id job_dir runlist out_dir nfiles <&3; do
     cd \"$job_dir\"
     ./run_adne_env.sh > \"$log\" 2>&1
   ) &
+  pids+=(\"$!\")
 
-  running=$((running + 1))
-  if (( running >= MAX_PARALLEL )); then
-    if ! wait -n; then
-      status=1
-    fi
-    running=$((running - 1))
+  if (( ${{#pids[@]}} >= MAX_PARALLEL )); then
+    wait_for_one_job
   fi
 done
 exec 3<&-
 
-while (( running > 0 )); do
-  if ! wait -n; then
-    status=1
-  fi
-  running=$((running - 1))
+while (( ${{#pids[@]}} > 0 )); do
+  wait_for_one_job
 done
 
 exit \"$status\"
