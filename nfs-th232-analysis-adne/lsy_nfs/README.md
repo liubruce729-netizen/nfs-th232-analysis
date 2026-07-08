@@ -24,31 +24,6 @@ Output file name:
 out/nfs_histoExogam2_1_peak_1440_1470.root
 ```
 
-## Co-60 Crystal Energy Histograms / Co-60 Crystal 能量谱
-
-从 `nfs_run_*.root` 的 `TreeMaster` 里直接读取 `fEXO_ECC_E_*` 分支，给每个 crystal 生成能量谱；不使用 `fNeutronTOF`，也不使用任何 time cut，适合 Co-60 能量刻度。脚本会先扫描每个 crystal 的最大正能量，如果超过默认上限，会自动扩展该 crystal 的能量轴。  
-The macro reads `fEXO_ECC_E_*` branches directly from `TreeMaster` in `nfs_run_*.root` files and builds one energy histogram per crystal. It does not use `fNeutronTOF` or any time cut, so it is suitable for Co-60 energy calibration. It first scans the maximum positive energy per crystal and automatically extends that crystal axis if the data exceed the default upper edge.
-
-```bash
-cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
-source /home/user0/work/IJCLAB/NFS/NFS_env.sh
-root -l -b -q 'lsy_nfs/make_co60_crystal_energy_hists.C("out/nfs_run_8_r0.root,out/nfs_run_8_r1.root","out/co60_crystal_energy_hists.root")'
-```
-
-输出图名保持为：  
-Output histogram names are kept as:
-
-```text
-nfs_clover%d_crystal%d_energy
-```
-
-随后可以直接运行 Co-60 自动刻度；Co-60 模式会在每个 crystal 全谱中寻找计数最高的两个峰，按位置从低到高对应 `1173.237 keV` 和 `1332.501 keV`，并在每个峰位 `+/-100` 范围内拟合。  
-Then run the Co-60 auto-calibration directly. In Co-60 mode, the calibration macro finds the two highest peaks in each crystal spectrum, assigns the lower-position peak to `1173.237 keV` and the higher one to `1332.501 keV`, and fits each peak within `+/-100` around the peak position.
-
-```bash
-root -l -b -q 'Utils/Autocal_NFS_CrystalEnergy.C("out/co60_crystal_energy_hists.root","Co60")'
-```
-
 ## DeltaT Gamma-Flash Fit / DeltaT Gamma Flash 拟合
 
 自动遍历输入 ROOT 文件中的 `nfs_clover*_crystal*_time` 直方图；同时兼容旧文件中的 `nfs_clover*_crystal*_deltaT` 命名。

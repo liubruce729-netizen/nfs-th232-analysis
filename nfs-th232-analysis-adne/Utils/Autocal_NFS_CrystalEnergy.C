@@ -12,7 +12,7 @@
 //   root -l -b -q 'Utils/Autocal_NFS_CrystalEnergy.C("out/nfs_histoExogam2_1.root","Co60")'
 //
 // Source options / 源选项:
-//   "Co60" or "Co"       : 1173.237, 1332.501 keV; global two-largest-peak search, fit +/-100
+//   "Co60" or "Co"       : 1173.237, 1332.501 keV
 //   "Eu152" or "Eu"      : common Eu-152 lines used in the old Autocal.cxx
 //   "Eu152Att" or "EuAtt": Eu-152 without the low 121.783 keV line
 //
@@ -43,7 +43,6 @@
 #include "TH1.h"
 #include "TH1D.h"
 #include "TLegend.h"
-#include "TLine.h"
 #include "TMath.h"
 #include "TPaveText.h"
 #include "TString.h"
@@ -58,7 +57,6 @@ struct SourceDefinition {
   std::vector<double> energiesKeV;
   double searchHalfWidthKeV;
   double fitHalfWidthKeV;
-  bool globalPeakSearch;
 };
 
 struct Coefficients {
@@ -117,9 +115,8 @@ SourceDefinition MakeSourceDefinition(const char *sourceName)
   if (s == "co" || s == "co60" || s == "60co") {
     source.name = "Co60";
     source.energiesKeV = {1173.237, 1332.501};
-    source.searchHalfWidthKeV = 0.0;
-    source.fitHalfWidthKeV = 100.0;
-    source.globalPeakSearch = true;
+    source.searchHalfWidthKeV = 90.0;
+    source.fitHalfWidthKeV = 30.0;
     return source;
   }
 
@@ -130,7 +127,6 @@ SourceDefinition MakeSourceDefinition(const char *sourceName)
         964.1310, 1085.800, 1112.1160, 1408.0110};
     source.searchHalfWidthKeV = 45.0;
     source.fitHalfWidthKeV = 18.0;
-    source.globalPeakSearch = false;
     return source;
   }
 
@@ -142,7 +138,6 @@ SourceDefinition MakeSourceDefinition(const char *sourceName)
         1085.800, 1112.1160, 1408.0110};
     source.searchHalfWidthKeV = 45.0;
     source.fitHalfWidthKeV = 18.0;
-    source.globalPeakSearch = false;
     return source;
   }
 
@@ -192,151 +187,6 @@ int FindMaximumBinInRange(TH1 *h, double xmin, double xmax)
     }
   }
   return bestBin;
-}
-
-PeakFitResult MakeFailedPeakResult(int sourceIndex, double expectedKeV)
-{
-  PeakFitResult result;
-  result.sourceIndex = sourceIndex;
-  result.expectedKeV = expectedKeV;
-  result.meanKeV = 0.0;
-  result.meanErrKeV = 0.0;
-  result.sigmaKeV = 0.0;
-  result.fwhmKeV = 0.0;
-  result.amplitude = 0.0;
-  result.backgroundOffset = 0.0;
-  result.backgroundSlope = 0.0;
-  result.fitLowKeV = 0.0;
-  result.fitHighKeV = 0.0;
-  result.peakCounts = 0.0;
-  result.chi2Ndf = 0.0;
-  result.fitStatus = -999;
-  result.ok = false;
-  return result;
-}
-
-struct GlobalPeakCandidate {
-  int bin;
-  double x;
-  double counts;
-};
-
-std::vector<double> FindGlobalPeakCenters(TH1 *h,
-                                          int nPeaks,
-                                          double minSeparation,
-                                          double minPeakCounts)
-{
-  std::vector<double> centers;
-  if (!h || nPeaks <= 0) return centers;
-
-  std::vector<GlobalPeakCandidate> candidates;
-  for (int bin = 2; bin < h->GetNbinsX(); ++bin) {
-    const double y = h->GetBinContent(bin);
-    if (y < minPeakCounts) continue;
-
-    const double yl = h->GetBinContent(bin - 1);
-    const double yr = h->GetBinContent(bin + 1);
-    if (y >= yl && y >= yr && (y > yl || y > yr)) {
-      candidates.push_back({bin, h->GetBinCenter(bin), y});
-    }
-  }
-
-  // EN: Fallback for very smooth spectra: use the largest bins, still enforcing separation.
-  // CN: 如果谱很平滑导致局部峰不足，则退化为按最大 bin 选择，同时仍要求峰间距。
-  if (static_cast<int>(candidates.size()) < nPeaks) {
-    for (int bin = 1; bin <= h->GetNbinsX(); ++bin) {
-      const double y = h->GetBinContent(bin);
-      if (y < minPeakCounts) continue;
-      candidates.push_back({bin, h->GetBinCenter(bin), y});
-    }
-  }
-
-  std::sort(candidates.begin(), candidates.end(),
-            [](const GlobalPeakCandidate &a, const GlobalPeakCandidate &b) {
-              return a.counts > b.counts;
-            });
-
-  for (const auto &candidate : candidates) {
-    bool tooClose = false;
-    for (const double selected : centers) {
-      if (std::abs(candidate.x - selected) < minSeparation) {
-        tooClose = true;
-        break;
-      }
-    }
-    if (tooClose) continue;
-
-    centers.push_back(candidate.x);
-    if (static_cast<int>(centers.size()) >= nPeaks) break;
-  }
-
-  std::sort(centers.begin(), centers.end());
-  return centers;
-}
-
-PeakFitResult FitPeakAroundPosition(TH1 *h,
-                                    int sourceIndex,
-                                    double expectedKeV,
-                                    double peakCenter,
-                                    double fitHalfWidthKeV,
-                                    double minPeakCounts)
-{
-  PeakFitResult result = MakeFailedPeakResult(sourceIndex, expectedKeV);
-  if (!h || h->GetEntries() <= 0 || peakCenter <= 0.0) return result;
-
-  const double fitLow = std::max(h->GetXaxis()->GetXmin(), peakCenter - fitHalfWidthKeV);
-  const double fitHigh = std::min(h->GetXaxis()->GetXmax(), peakCenter + fitHalfWidthKeV);
-  if (fitHigh <= fitLow) return result;
-
-  const int maxBin = FindMaximumBinInRange(h, fitLow, fitHigh);
-  if (maxBin < 1) return result;
-
-  const double peakX = h->GetBinCenter(maxBin);
-  const double peakY = h->GetBinContent(maxBin);
-  result.peakCounts = peakY;
-  if (peakY < minPeakCounts) return result;
-
-  result.fitLowKeV = fitLow;
-  result.fitHighKeV = fitHigh;
-
-  const double binWidth = h->GetBinWidth(maxBin);
-  const double leftY = h->GetBinContent(std::max(1, h->GetXaxis()->FindBin(fitLow)));
-  const double rightY = h->GetBinContent(std::min(h->GetNbinsX(), h->GetXaxis()->FindBin(fitHigh)));
-  const double bg0 = 0.5 * (leftY + rightY);
-  const double amp0 = std::max(peakY - bg0, peakY * 0.5);
-  const double sigma0 = std::max(1.2 * binWidth, fitHalfWidthKeV / 8.0);
-
-  TF1 fitFunc(Form("nfs_global_peak_fit_%d_%.0f", sourceIndex, peakCenter),
-              "gaus(0)+pol1(3)", fitLow, fitHigh);
-  fitFunc.SetParameters(amp0, peakX, sigma0, bg0, 0.0);
-  fitFunc.SetParLimits(0, 0.0, std::max(peakY * 20.0, 1.0));
-  fitFunc.SetParLimits(1, fitLow, fitHigh);
-  fitFunc.SetParLimits(2, std::max(0.2 * binWidth, 0.1), fitHalfWidthKeV);
-  fitFunc.SetLineColor(kRed + sourceIndex % 6);
-  fitFunc.SetNpx(500);
-
-  const int status = h->Fit(&fitFunc, "QRS0");
-  result.fitStatus = status;
-
-  const double mean = fitFunc.GetParameter(1);
-  const double sigma = std::abs(fitFunc.GetParameter(2));
-  const double amp = fitFunc.GetParameter(0);
-  const double ndf = fitFunc.GetNDF();
-  result.amplitude = amp;
-  result.backgroundOffset = fitFunc.GetParameter(3);
-  result.backgroundSlope = fitFunc.GetParameter(4);
-  result.meanKeV = mean;
-  result.meanErrKeV = fitFunc.GetParError(1);
-  result.sigmaKeV = sigma;
-  result.fwhmKeV = 2.354820045 * sigma;
-  result.chi2Ndf = ndf > 0.0 ? fitFunc.GetChisquare() / ndf : 0.0;
-  result.ok = (status == 0 || status == 4000) &&
-              amp > 0.0 &&
-              sigma > 0.0 &&
-              mean >= fitLow &&
-              mean <= fitHigh;
-
-  return result;
 }
 
 PeakFitResult FitOnePeak(TH1 *h,
@@ -446,19 +296,6 @@ bool FitCalibration(const std::vector<PeakFitResult> &peaks,
   const int minPeaks = useQuadratic ? 3 : 2;
   if (usedPeaks < minPeaks) return false;
 
-  if (!useQuadratic && usedPeaks == 2) {
-    // EN: With Co-60 two points are enough for an exact linear calibration;
-    //     avoid ROOT fit-status ambiguity when NDF is zero.
-    // CN: Co-60 两个点足够精确确定线性刻度；避免 NDF=0 时 ROOT fit 状态码不稳定。
-    const double dx = measured[1] - measured[0];
-    if (std::abs(dx) <= 1e-12) return false;
-    coeff.gain = (expected[1] - expected[0]) / dx;
-    coeff.offset = expected[0] - coeff.gain * measured[0];
-    coeff.gain2 = 0.0;
-    chi2Ndf = 0.0;
-    return true;
-  }
-
   TGraphErrors graph(usedPeaks);
   for (int i = 0; i < usedPeaks; ++i) {
     graph.SetPoint(i, measured[i], expected[i]);
@@ -499,13 +336,11 @@ void DrawCrystalFit(TDirectory *canvasDir,
 
   const double ymax = h->GetMaximum();
   for (const auto &peak : result.peaks) {
-    if (!source.globalPeakSearch) {
-      TLine *lineExpected = new TLine(peak.expectedKeV, 0.0, peak.expectedKeV, ymax * 0.92);
-      lineExpected->SetLineColor(kBlue + 1);
-      lineExpected->SetLineStyle(2);
-      lineExpected->Write(Form("expected_line_%d", peak.sourceIndex));
-      lineExpected->Draw("same");
-    }
+    TLine *lineExpected = new TLine(peak.expectedKeV, 0.0, peak.expectedKeV, ymax * 0.92);
+    lineExpected->SetLineColor(kBlue + 1);
+    lineExpected->SetLineStyle(2);
+    lineExpected->Write(Form("expected_line_%d", peak.sourceIndex));
+    lineExpected->Draw("same");
 
     if (peak.ok) {
       TF1 *curve = new TF1(Form("fit_curve_clover%d_crystal%d_peak%d",
@@ -672,37 +507,13 @@ void Autocal_NFS_CrystalEnergy(
         result.entries = h->GetEntries();
 
         if (result.entries > 0.0) {
-          if (source.globalPeakSearch) {
-            // EN: Co-60 full-auto mode: find the two highest global peaks and
-            //     assign the lower-position peak to 1173 keV and the higher one to 1332 keV.
-            // CN: Co-60 全自动模式：寻找全谱最高的两个峰；位置较低的峰对应 1173 keV，较高的对应 1332 keV。
-            const std::vector<double> peakCenters = FindGlobalPeakCenters(
-                h, static_cast<int>(source.energiesKeV.size()),
-                source.fitHalfWidthKeV, minPeakCounts);
-            for (std::size_t i = 0; i < source.energiesKeV.size(); ++i) {
-              if (i < peakCenters.size()) {
-                result.peaks.push_back(FitPeakAroundPosition(h,
-                                                             static_cast<int>(i),
-                                                             source.energiesKeV[i],
-                                                             peakCenters[i],
-                                                             source.fitHalfWidthKeV,
-                                                             minPeakCounts));
-              }
-              else {
-                result.peaks.push_back(MakeFailedPeakResult(static_cast<int>(i),
-                                                            source.energiesKeV[i]));
-              }
-            }
-          }
-          else {
-            for (std::size_t i = 0; i < source.energiesKeV.size(); ++i) {
-              result.peaks.push_back(FitOnePeak(h,
-                                                static_cast<int>(i),
-                                                source.energiesKeV[i],
-                                                source.searchHalfWidthKeV,
-                                                source.fitHalfWidthKeV,
-                                                minPeakCounts));
-            }
+          for (std::size_t i = 0; i < source.energiesKeV.size(); ++i) {
+            result.peaks.push_back(FitOnePeak(h,
+                                              static_cast<int>(i),
+                                              source.energiesKeV[i],
+                                              source.searchHalfWidthKeV,
+                                              source.fitHalfWidthKeV,
+                                              minPeakCounts));
           }
 
           result.calibrationOk = FitCalibration(result.peaks,
@@ -749,7 +560,6 @@ void Autocal_NFS_CrystalEnergy(
   textOut << "# NFS crystal 能量自动刻度结果\n";
   textOut << "# input_file " << inputFile << "\n";
   textOut << "# source " << source.name << "\n";
-  textOut << "# mode " << (source.globalPeakSearch ? "global_two_largest_peaks" : "known_energy_windows") << "\n";
   textOut << "# Columns:\n";
   textOut << "# clover crystal detector entries status usedPeaks offset gain gain2 calChi2Ndf";
   for (std::size_t i = 0; i < source.energiesKeV.size(); ++i) {
