@@ -324,9 +324,9 @@ bool TExogam2::NfsSpectraConstructor(){
 	fNfsCrystalCsiEfficiency = new TProfile("nfs_crystal_csi_efficiency","NFS crystal CSI efficiency;Crystal (clover-crystal);CSI fire efficiency",64,-0.5,63.5,0.0,1.0);
 	HListNfsExogam2.Add(fNfsCrystalCsiEfficiency);
 
-	// EN: No prompt, time, timestamp, or BGO/CSI veto cut; only positive raw crystal energies are required.
-	// CN: 不加 prompt、time、timestamp、BGO/CSI veto cut；仅要求 raw crystal 能量为正。
-	fNfsAllGammaGammaMatrixNoCut = new TH2F("nfs_all_gamma_gamma_matrix_no_cut","NFS all crystal gamma-gamma no cut;Gamma energy (keV);Gamma energy (keV)",4096,0,4096,4096,0,4096);
+	// EN: Addback gamma-gamma matrix using BGO/CSI-vetoed E877 addback gammas, with no prompt/time/TS cuts.
+	// CN: 使用 BGO/CSI veto 后的 E877 addback gamma 填 gamma-gamma，不加 prompt/time/TS cut。
+	fNfsAllGammaGammaMatrixNoCut = new TH2F("nfs_all_gamma_gamma_matrix_no_cut","NFS addback gamma-gamma BGO CSI veto no cut;Addback gamma energy (keV);Addback gamma energy (keV)",4096,0,4096,4096,0,4096);
 	HListNfsExogam2.Add(fNfsAllGammaGammaMatrixNoCut);
 
 	for(Int_t id=0; id<16*4; id++){
@@ -1641,19 +1641,6 @@ SumCalorimeter=0;
 		}
 	}
 	//------------------Energy Treat
-	// EN: NFS no-cut gamma-gamma matrix uses all positive raw crystal energies before prompt/TS/veto cuts.
-	// CN: NFS 无 cut gamma-gamma 矩阵使用所有正 raw crystal 能量，位置在 prompt/TS/veto 判断之前。
-	if(NfsSpec && fNfsAllGammaGammaMatrixNoCut && fExogam2Data->GetECCEMult()>1){
-		for (UShort_t i = 0; i < fExogam2Data->GetECCEMult(); i++) {
-			if(fExogam2Data->GetECCEEnergy(i)<=0)continue;
-			for (UShort_t j = 0; j < fExogam2Data->GetECCEMult(); j++) {
-				if(j==i)continue;
-				if(fExogam2Data->GetECCEEnergy(j)<=0)continue;
-				fNfsAllGammaGammaMatrixNoCut->Fill(fExogam2Data->GetECCEEnergy(i),fExogam2Data->GetECCEEnergy(j));
-			}
-		}
-	}
-
 	if(fExogam2Data->GetECCEMult()>1){
 		for (UShort_t i = 0; i < fExogam2Data->GetECCEMult(); i++) {
 			for (UShort_t j = 0; j < fExogam2Data->GetECCEMult(); j++) {
@@ -1821,6 +1808,23 @@ SumCalorimeter=0;
 		fExogam2Data->SetE877CloverBGO(E877CloverBGO[c]);
 		fExogam2Data->SetE877CloverCSI(E877CloverCSI[c]);
 		FillNfsCloverAddbackSpectra(c,E877CloverE[c],E877CloverBGO[c],E877CloverCSI[c]);
+	}
+
+	// EN: No-cut gamma-gamma matrix requested for addback gammas with BGO/CSI veto only.
+	//     No prompt, corrected Time, timestamp, neutron-energy, or multiplicity cut is applied here.
+	// CN: 无 cut gamma-gamma 矩阵使用 BGO/CSI veto 后的 addback gamma。
+	//     这里不加 prompt、修正 Time、timestamp、中子能量或多重度 cut。
+	if(NfsSpec && fNfsAllGammaGammaMatrixNoCut){
+		for(Int_t c1=0;c1<16;c1++){
+			if(CloverPresent[c1]==false || E877CloverFired[c1]==false)continue;
+			if(E877CloverE[c1]<=0 || E877CloverBGO[c1]>0 || E877CloverCSI[c1]>0)continue;
+			for(Int_t c2=0;c2<16;c2++){
+				if(c2==c1)continue;
+				if(CloverPresent[c2]==false || E877CloverFired[c2]==false)continue;
+				if(E877CloverE[c2]<=0 || E877CloverBGO[c2]>0 || E877CloverCSI[c2]>0)continue;
+				fNfsAllGammaGammaMatrixNoCut->Fill(E877CloverE[c1],E877CloverE[c2]);
+			}
+		}
 	}
 
 	if(BoolSpec)fMyHistoMultiCrystal->Fill(fExogam2Data->GetECCEMult());
