@@ -40,6 +40,7 @@ TExogam2::TExogam2(bool bspec)
    fNfsCrystalCrossTalk=NULL;
    fNfsCrystalBgoEfficiency=NULL;
    fNfsCrystalCsiEfficiency=NULL;
+   fNfsAllGammaGammaMatrixNoCut=NULL;
    for(Int_t i=0;i<16*4;i++){
       fNfsCrystalDeltaT[i]=NULL;
       fNfsCrystalEnergy[i]=NULL;
@@ -323,6 +324,11 @@ bool TExogam2::NfsSpectraConstructor(){
 	fNfsCrystalCsiEfficiency = new TProfile("nfs_crystal_csi_efficiency","NFS crystal CSI efficiency;Crystal (clover-crystal);CSI fire efficiency",64,-0.5,63.5,0.0,1.0);
 	HListNfsExogam2.Add(fNfsCrystalCsiEfficiency);
 
+	// EN: No prompt, time, timestamp, or BGO/CSI veto cut; only positive raw crystal energies are required.
+	// CN: 不加 prompt、time、timestamp、BGO/CSI veto cut；仅要求 raw crystal 能量为正。
+	fNfsAllGammaGammaMatrixNoCut = new TH2F("nfs_all_gamma_gamma_matrix_no_cut","NFS all crystal gamma-gamma no cut;Gamma energy (keV);Gamma energy (keV)",4096,0,4096,4096,0,4096);
+	HListNfsExogam2.Add(fNfsAllGammaGammaMatrixNoCut);
+
 	for(Int_t id=0; id<16*4; id++){
 		TString label = TString::Format("%d-%d", id/4, id%4);
 		fNfsCrystalCrossTalk->GetXaxis()->SetBinLabel(id+1,label.Data());
@@ -363,11 +369,16 @@ bool TExogam2::NfsSpectraConstructor(){
 void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t timeNs, Float_t energy){
 	if(!NfsSpec)return;
 	if(mapFinger<0 || mapFinger>=16*4)return;
-	if(energy<=0 || timeNs<=0)return;
+	// EN: Crystal energy spectra use the same loose condition as E877 addback: raw gamma energy > 0.
+	// CN: Crystal 能量谱采用和 E877 addback 一致的宽松条件：raw gamma 能量 > 0。
+	if(energy<=0)return;
+	if(fNfsCrystalEnergy[mapFinger])fNfsCrystalEnergy[mapFinger]->Fill(energy);
+	// EN: Time spectra still require a valid positive corrected Time.
+	// CN: Time 谱仍然要求修正后的 Time 为有效正值。
+	if(timeNs<=0)return;
 	if(fNfsCrystalDeltaTEnergy)fNfsCrystalDeltaTEnergy->Fill(timeNs,energy);
 	if(fNfsAllCrystalTime)fNfsAllCrystalTime->Fill(timeNs);
 	if(fNfsCrystalDeltaT[mapFinger])fNfsCrystalDeltaT[mapFinger]->Fill(timeNs);
-	if(fNfsCrystalEnergy[mapFinger])fNfsCrystalEnergy[mapFinger]->Fill(energy);
 }
 
 void TExogam2::FillNfsCrystalEventSpectra(Bool_t *crystalFired, Bool_t *bgoFired, Bool_t *csiFired){
@@ -1158,7 +1169,6 @@ bool TExogam2::IsMFMExo(MFMExogamFrame *frame)
 			validNfsTime=true;
 			fExogam2Data->SetDeltaT(deltaTNs);
 			fExogam2Data->SetNeutronTOF(neutronTOF);
-			FillNfsSpectra(MapFinger,clo,cri,neutronTOF,valf);
 		}
 		fExogam2Data->SetNeutronNRJ(neutronNRJ);
 	}
@@ -1631,6 +1641,19 @@ SumCalorimeter=0;
 		}
 	}
 	//------------------Energy Treat
+	// EN: NFS no-cut gamma-gamma matrix uses all positive raw crystal energies before prompt/TS/veto cuts.
+	// CN: NFS 无 cut gamma-gamma 矩阵使用所有正 raw crystal 能量，位置在 prompt/TS/veto 判断之前。
+	if(NfsSpec && fNfsAllGammaGammaMatrixNoCut && fExogam2Data->GetECCEMult()>1){
+		for (UShort_t i = 0; i < fExogam2Data->GetECCEMult(); i++) {
+			if(fExogam2Data->GetECCEEnergy(i)<=0)continue;
+			for (UShort_t j = 0; j < fExogam2Data->GetECCEMult(); j++) {
+				if(j==i)continue;
+				if(fExogam2Data->GetECCEEnergy(j)<=0)continue;
+				fNfsAllGammaGammaMatrixNoCut->Fill(fExogam2Data->GetECCEEnergy(i),fExogam2Data->GetECCEEnergy(j));
+			}
+		}
+	}
+
 	if(fExogam2Data->GetECCEMult()>1){
 		for (UShort_t i = 0; i < fExogam2Data->GetECCEMult(); i++) {
 			for (UShort_t j = 0; j < fExogam2Data->GetECCEMult(); j++) {
@@ -1713,6 +1736,7 @@ SumCalorimeter=0;
 
 			Int_t nfsCrystalId=clo*4+cri;
 			if(nfsCrystalId>=0 && nfsCrystalId<16*4){
+				FillNfsSpectra(nfsCrystalId,clo,cri,e877Time,e877Energy);
 				// EN: Event-level crystal fire for cross-talk and BGO/CSI efficiency, with zero-energy fires skipped.
 				// CN: 用于串扰和 BGO/CSI 效率的 event 级 crystal fire，跳过零能量 fire。
 				NfsCrystalFired[nfsCrystalId]=true;

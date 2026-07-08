@@ -176,6 +176,8 @@ class TExogam2 : public TDetector {
    TH2F * fNfsCrystalCrossTalk;
    TProfile * fNfsCrystalBgoEfficiency;
    TProfile * fNfsCrystalCsiEfficiency;
+   // EN: No-cut raw crystal gamma-gamma matrix. CN: 不加 cut 的 raw crystal gamma-gamma 符合矩阵。
+   TH2F * fNfsAllGammaGammaMatrixNoCut;
    TH1F * fNfsCloverAddbackGamma[16];
    TH1F * fNfsCloverAddbackGammaVeto[16];
 

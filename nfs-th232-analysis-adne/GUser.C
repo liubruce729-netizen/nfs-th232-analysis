@@ -35,6 +35,11 @@
 #include "GUser.h"
 //_________________________________global_variables______________________________
 
+namespace {
+const UShort_t kNfsVetoCloverMultiplicityMin = 2;
+}
+
+
 
 //______________________________________________________________________________
 
@@ -1022,7 +1027,7 @@ void GUser::User()
     if(TreeFillBool)cout<< "Current Tree :: is "<< fileTree2->GetName()<<" / "<<LocalTree->GetEntries()<<" evt  (" <<LocalTree->GetTotBytes()/8e10<<" Go)"<<endl;
     if(RawTreeFillBool)cout<< "Current RawTree :: is "<< fileTree2->GetName()<<" / "<<RawTree->GetEntries()<<" evt  (" <<RawTree->GetTotBytes()/8e10<<" Go)"<<endl;
     if(NfsTreeFillBool)cout<< "Current NFS Tree :: is "<< fileNfsTree->GetName()<<" / "<<NfsTree->GetEntries()<<" evt  (" <<NfsTree->GetTotBytes()/8e10<<" Go)"<<endl;
-    if(NfsMult3TreeFillBool)cout<< "Current NFS mult3 Tree :: is "<< fileNfsMult3Tree->GetName()<<" / "<<NfsMult3Tree->GetEntries()<<" evt  (" <<NfsMult3Tree->GetTotBytes()/8e10<<" Go)"<<endl;
+    if(NfsMult3TreeFillBool)cout<< "Current NFS mult>=2 Tree :: is "<< fileNfsMult3Tree->GetName()<<" / "<<NfsMult3Tree->GetEntries()<<" evt  (" <<NfsMult3Tree->GetTotBytes()/8e10<<" Go)"<<endl;
     gSystem->GetCpuInfo(&cpuinfos);
     gSystem->GetMemInfo(&meminfos);
     //printf("\033[32mInfo SYS:: RAM:: %2.1f\%, SWAP:: %2.1f\%, CPU Load:: %2.1f\%  \033[m \n",100.*meminfos.fMemUsed/meminfos.fMemTotal,100.*meminfos.fSwapUsed/meminfos.fSwapTotal,cpuinfos.fIdle);
@@ -1071,7 +1076,7 @@ void GUser::User()
  
   if(TreeFillBool)LocalTree->Fill();
   if(NfsTreeFillBool)NfsTree->Fill();
-  if(NfsMult3TreeFillBool && fExogam2->GetExogam2Data()->GetE877CloverVetoMult()>=3)NfsMult3Tree->Fill();
+  if(NfsMult3TreeFillBool && fExogam2->GetExogam2Data()->GetE877CloverVetoMult()>=kNfsVetoCloverMultiplicityMin)NfsMult3Tree->Fill();
   
   
   
@@ -1129,14 +1134,14 @@ void GUser::EndUserRun()
     fileNfsMult3Tree->cd();
     fileNfsMult3Tree->ls();
     if(NfsMult3Tree){
-      cout<<"Final Writing NFS mult3 Tree :: "<< NfsMult3Tree->GetTotBytes()/8e9<<" Go " <<endl;
+      cout<<"Final Writing NFS mult>=2 Tree :: "<< NfsMult3Tree->GetTotBytes()/8e9<<" Go " <<endl;
       NfsMult3Tree->Show();
       NfsMult3Tree->Write();
     }
     fileNfsMult3Tree->ls();
-    cout<<"Done NFS mult3 Tree !"<<endl;
+    cout<<"Done NFS mult>=2 Tree !"<<endl;
     fileNfsMult3Tree->Close();
-    cout<<"NFS mult3 Tree File closed"<<endl;
+    cout<<"NFS mult>=2 Tree File closed"<<endl;
     NfsMult3TreeFillBool=false;
     NfsMult3Tree=NULL;
     fileNfsMult3Tree=NULL;
@@ -1324,11 +1329,11 @@ void GUser::InitTTreeUser(Char_t *nameF, bool Exogam, bool Trigger, bool MW, boo
     TString mult3Name = BuildNfsMult3TreeFileName(nameF);
     fileNfsMult3Tree= new TFile(mult3Name.Data(),"RECREATE");
     fileNfsMult3Tree->ls();
-    NfsMult3Tree=new TTree("TreeMaster","NFS veto clover multiplicity >= 3 TreeMaster");
+    NfsMult3Tree=new TTree("TreeMaster","NFS veto clover multiplicity >= 2 TreeMaster");
     NfsMult3Tree->ls();
     NfsMult3TreeFillBool=true;
     fExogam2->InitBranch(NfsMult3Tree);
-    cout<< "NFS Exogam2 mult3 Tree ok: " << mult3Name << endl;
+    cout<< "NFS Exogam2 mult>=2 Tree ok: " << mult3Name << " (file prefix kept as mult3_ for script compatibility)" << endl;
   }
 
   if(StandardTree){
@@ -1401,6 +1406,8 @@ TString GUser::BuildNfsTreeFileName(Char_t *nameF)
 
 TString GUser::BuildNfsMult3TreeFileName(Char_t *nameF)
 {
+  // EN: File prefix is kept as mult3_ so existing ADNE/fission helper scripts remain compatible.
+  // CN: 文件前缀暂时保留 mult3_，以兼容已有 ADNE/fission 辅助脚本。
   TString mult3Name = BuildNfsTreeFileName(nameF);
   Ssiz_t slash = mult3Name.Last('/');
   if(slash == kNPOS) mult3Name.Prepend("mult3_");
