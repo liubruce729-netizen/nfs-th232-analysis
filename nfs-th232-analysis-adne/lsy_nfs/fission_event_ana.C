@@ -5,6 +5,7 @@
 //   root -l -b -q 'lsy_nfs/fission_event_ana.C("out/mult3_nfs_run_100_r0.root",8.6,20,"2,4,7,12,20,30,50")'
 //   root -l -b -q 'lsy_nfs/fission_event_ana.C("out/mult3_nfs_run_100_r0.root,out/mult3_nfs_run_100_r1.root",8.6,20,"2,4,7,12,20,30,50","out/fission_event_ana.root")'
 //   root -l -b -q 'lsy_nfs/fission_event_ana.C("@out/mult3_filelist.txt",8.6,20,"2,4,7,12,20,30,50","out/fission_event_ana.root")'
+//   root -l -b -q 'lsy_nfs/fission_event_ana.C("@out/mult3_filelist.txt",8.6,20,"4,10,20,50","out/fission_event_ana.root",true,-1,3)'  // force mult>=3
 //
 // EN: The macro reads f_E877_Clover_* split branches from TreeMaster.
 // CN: 该宏读取 TreeMaster 中的 f_E877_Clover_* 拆分分支。
@@ -191,6 +192,7 @@ struct EnergyTimeBin {
   TH1F *spectrum = nullptr;
   TH2F *matrix = nullptr;
   Long64_t selectedEvents = 0;
+  Long64_t selectedGammaFires = 0;
 };
 
 int FindEnergyTimeBin(const std::vector<EnergyTimeBin> &bins, double eventTimeNs)
@@ -242,8 +244,13 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
                        const char *energyBinEdgesMeV = "2,4,7,12,20,30,50",
                        const char *outputFile = "",
                        bool useBgoCsiVeto = true,
-                       Long64_t maxEntries = -1)
+                       Long64_t maxEntries = -1,
+                       int minCloverMultiplicity = 2)
 {
+  if (minCloverMultiplicity < 1) {
+    std::cerr << "Invalid minCloverMultiplicity: " << minCloverMultiplicity << std::endl;
+    return;
+  }
   if (nfsDistanceMeter <= 0.0) {
     std::cerr << "Invalid nfsDistanceMeter: " << nfsDistanceMeter << std::endl;
     return;
@@ -289,9 +296,10 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
 
   // EN: Filled only after the same fission-candidate cuts as the 1D spectra and matrices.
   // CN: 只在通过与一维谱/符合矩阵相同的裂变候选 cut 后填充。
+  const TString multiplicityTitle = TString::Format("Mult>=%d fission candidates", minCloverMultiplicity);
   TH2F *gammaEnergyVsTime = new TH2F(
       "Mult3GammaEnergyVsTime",
-      "Mult3 fission candidates;Clover addback gamma energy (keV);Clover Time (ns)",
+      TString::Format("%s;Clover addback gamma energy (keV);Clover Time (ns)", multiplicityTitle.Data()),
       4096, 0.0, 4096.0, 1600, 0.0, 1600.0);
 
   TChain chain("TreeMaster");
@@ -385,9 +393,9 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
       if (time < eventTimeNs) eventTimeNs = time;
     }
 
-    // EN: Fission-candidate definition after all per-fire cuts: at least 3 clover fires remain.
-    // CN: 所有单个 fire cut 之后，剩余 clover fire 数 >=3 才作为裂变候选事件。
-    if (selectedEnergies.size() < 3) {
+    // EN: Fission-candidate definition after all per-fire cuts: at least N clover fires remain.
+    // CN: 所有单个 fire cut 之后，剩余 clover fire 数 >=N 才作为裂变候选事件。
+    if (selectedEnergies.size() < static_cast<std::size_t>(minCloverMultiplicity)) {
       skippedMultiplicity++;
       continue;
     }
@@ -402,6 +410,7 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
 
     keptAfterTimeCut++;
     bins[binIndex].selectedEvents++;
+    bins[binIndex].selectedGammaFires += static_cast<Long64_t>(selectedEnergies.size());
     for (float energy : selectedEnergies) {
       bins[binIndex].spectrum->Fill(energy);
     }
@@ -432,28 +441,45 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
   TDirectory *histDir = out.mkdir("fission_event_ana");
   histDir->cd();
 
-  const TString configTitle = TString::Format("input=%s; distance_m=%.6g; time_fwhm_ns=%.6g; t_min_50MeV_ns=%.6g; t_cut_ns=%.6g; energy_edges_MeV=%s; use_bgo_csi_veto=%d",
+  const TString configTitle = TString::Format("input=%s; distance_m=%.6g; time_fwhm_ns=%.6g; t_min_50MeV_ns=%.6g; t_cut_ns=%.6g; energy_edges_MeV=%s; use_bgo_csi_veto=%d; min_clover_multiplicity=%d",
                                              inputFiles, nfsDistanceMeter, timeFwhmNs,
                                              tMinNs, tCutNs, energyBinEdgesMeV,
-                                             useBgoCsiVeto ? 1 : 0);
+                                             useBgoCsiVeto ? 1 : 0,
+                                             minCloverMultiplicity);
   TNamed config("FissionEventAnaConfig", configTitle.Data());
   config.Write();
 
-  TH1F summary("FissionEventAnaSummary", "FissionEventAnaSummary;Category;Counts", 5, 0.5, 5.5);
+  Long64_t acceptedGammaFires = 0;
+  for (const auto &bin : bins) acceptedGammaFires += bin.selectedGammaFires;
+
+  TH1F summary("FissionEventAnaSummary", "FissionEventAnaSummary;Category;Counts", 6, 0.5, 6.5);
   summary.GetXaxis()->SetBinLabel(1, "Input entries");
   summary.GetXaxis()->SetBinLabel(2, "Accepted events");
-  summary.GetXaxis()->SetBinLabel(3, "Rejected mult");
-  summary.GetXaxis()->SetBinLabel(4, "Rejected no bin");
-  summary.GetXaxis()->SetBinLabel(5, "Malformed");
+  summary.GetXaxis()->SetBinLabel(3, "Accepted clover fires");
+  summary.GetXaxis()->SetBinLabel(4, "Rejected mult/time/veto");
+  summary.GetXaxis()->SetBinLabel(5, "Rejected no bin");
+  summary.GetXaxis()->SetBinLabel(6, "Malformed");
   summary.SetBinContent(1, totalEntries);
   summary.SetBinContent(2, keptAfterTimeCut);
-  summary.SetBinContent(3, skippedMultiplicity);
-  summary.SetBinContent(4, skippedNoBin);
-  summary.SetBinContent(5, skippedMalformed);
+  summary.SetBinContent(3, acceptedGammaFires);
+  summary.SetBinContent(4, skippedMultiplicity);
+  summary.SetBinContent(5, skippedNoBin);
+  summary.SetBinContent(6, skippedMalformed);
   summary.Write();
 
+  TH1F binEventCounts("FissionEventAnaEventsByEnergyBin", "FissionEventAnaEventsByEnergyBin;Neutron energy bin;Events", bins.size(), 0.5, bins.size()+0.5);
+  TH1F binGammaCounts("FissionEventAnaGammaFiresByEnergyBin", "FissionEventAnaGammaFiresByEnergyBin;Neutron energy bin;Clover fires", bins.size(), 0.5, bins.size()+0.5);
+  for (std::size_t i = 0; i < bins.size(); ++i) {
+    binEventCounts.GetXaxis()->SetBinLabel(i+1, bins[i].tag.Data());
+    binGammaCounts.GetXaxis()->SetBinLabel(i+1, bins[i].tag.Data());
+    binEventCounts.SetBinContent(i+1, bins[i].selectedEvents);
+    binGammaCounts.SetBinContent(i+1, bins[i].selectedGammaFires);
+  }
+  binEventCounts.Write();
+  binGammaCounts.Write();
+
   gammaEnergyVsTime->Write();
-  WriteCanvasForMatrix(histDir, gammaEnergyVsTime, "Selected mult3 fission candidates");
+  WriteCanvasForMatrix(histDir, gammaEnergyVsTime, multiplicityTitle);
 
   for (auto &bin : bins) {
     bin.spectrum->Write();
@@ -467,7 +493,9 @@ void fission_event_ana(const char *inputFiles = "out/mult3_nfs_run_100_r0.root",
   std::cout << "Input entries: " << totalEntries << std::endl;
   std::cout << "t_min(50 MeV): " << tMinNs << " ns" << std::endl;
   std::cout << "t_cut: " << tCutNs << " ns" << std::endl;
+  std::cout << "Min clover multiplicity after cuts: " << minCloverMultiplicity << std::endl;
   std::cout << "Accepted events: " << keptAfterTimeCut << std::endl;
+  std::cout << "Accepted clover fires: " << acceptedGammaFires << std::endl;
   std::cout << "Rejected by multiplicity/time/veto: " << skippedMultiplicity << std::endl;
   std::cout << "Rejected outside energy bins: " << skippedNoBin << std::endl;
   std::cout << "Malformed entries: " << skippedMalformed << std::endl;
