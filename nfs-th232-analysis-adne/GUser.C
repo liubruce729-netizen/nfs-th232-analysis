@@ -32,11 +32,42 @@
 #include "GEventMFM.h"
 #include "fstream"
 #include <cstdlib>
+#include <cstdio>
+#include <sstream>
+#include <string>
 #include "GUser.h"
 //_________________________________global_variables______________________________
 
 namespace {
 const UShort_t kNfsVetoCloverMultiplicityMin = 2;
+
+void AppendNfsCrystalLabels(std::vector<TString> &labels, const TString &rawList)
+{
+  // EN: Accept either YAML lists or one comma-separated scalar string.
+  // CN: 支持 YAML 列表，也支持一个逗号分隔的字符串。
+  std::stringstream stream(rawList.Data());
+  std::string item;
+  while(std::getline(stream,item,',')){
+    TString label(item.c_str());
+    label.ReplaceAll(" ","");
+    label.ReplaceAll("	","");
+    if(label.Length()>0)labels.push_back(label);
+  }
+}
+
+bool ParseNfsCrystalLabel(const TString &label, Int_t &clover, Int_t &crystal)
+{
+  TString normalized(label);
+  normalized.ReplaceAll(" ","");
+  normalized.ReplaceAll("	","");
+  normalized.ReplaceAll(":","-");
+  normalized.ReplaceAll("_","-");
+  normalized.ReplaceAll("/","-");
+  clover=-1;
+  crystal=-1;
+  if(std::sscanf(normalized.Data(),"%d-%d",&clover,&crystal)!=2)return false;
+  return clover>=0 && clover<16 && crystal>=0 && crystal<4;
+}
 }
 
 
@@ -81,6 +112,7 @@ GUser::GUser (GDevice* _fDevIn, GDevice* _fDevOut)
   fNfsExoAnaRawTree = false;
   fNfsExoAnaCrystalTimeCorrection = false;
   fNfsExoAnaCorrectionPath = "";
+  fNfsExoAnaDisabledCrystals.clear();
   YAML::Node nfsExoAna = config["nfs_exo_ana"];
   if (nfsExoAna) {
     if (nfsExoAna["tree"]) fNfsExoAnaTree = nfsExoAna["tree"].as<bool>();
@@ -88,12 +120,29 @@ GUser::GUser (GDevice* _fDevIn, GDevice* _fDevOut)
     if (nfsExoAna["raw_tree"]) fNfsExoAnaRawTree = nfsExoAna["raw_tree"].as<bool>();
     if (nfsExoAna["crystal_time_correction"]) fNfsExoAnaCrystalTimeCorrection = nfsExoAna["crystal_time_correction"].as<bool>();
     if (nfsExoAna["correction_path"]) fNfsExoAnaCorrectionPath = nfsExoAna["correction_path"].as<std::string>().c_str();
+    if (nfsExoAna["disabled_crystals"]) {
+      YAML::Node disabledCrystals = nfsExoAna["disabled_crystals"];
+      if(disabledCrystals.IsSequence()){
+        for(std::size_t i=0;i<disabledCrystals.size();i++){
+          if(disabledCrystals[i].IsSequence() && disabledCrystals[i].size()==2){
+            fNfsExoAnaDisabledCrystals.push_back(TString::Format("%d-%d",disabledCrystals[i][0].as<int>(),disabledCrystals[i][1].as<int>()));
+          }
+          else if(disabledCrystals[i].IsScalar()){
+            AppendNfsCrystalLabels(fNfsExoAnaDisabledCrystals,disabledCrystals[i].as<std::string>().c_str());
+          }
+        }
+      }
+      else if(disabledCrystals.IsScalar()){
+        AppendNfsCrystalLabels(fNfsExoAnaDisabledCrystals,disabledCrystals.as<std::string>().c_str());
+      }
+    }
   }
   cout << "NFS Exogam analysis switches: tree=" << (fNfsExoAnaTree ? "true" : "false")
        << " spec=" << (fNfsExoAnaSpec ? "true" : "false")
        << " raw_tree=" << (fNfsExoAnaRawTree ? "true" : "false")
        << " crystal_time_correction=" << (fNfsExoAnaCrystalTimeCorrection ? "true" : "false")
-       << " correction_path=" << fNfsExoAnaCorrectionPath << endl;
+       << " correction_path=" << fNfsExoAnaCorrectionPath
+       << " disabled_crystals=" << fNfsExoAnaDisabledCrystals.size() << endl;
   bool spec_exogam2	=	config["Guser"]["spec_exogam2"].as<bool>();
   bool spec_trigger	=	config["Guser"]["spec_trigger"].as<bool>();
   bool spec_MW		=	config["Guser"]["spec_MW"].as<bool>();
@@ -223,6 +272,16 @@ GUser::GUser (GDevice* _fDevIn, GDevice* _fDevOut)
   fExogam2->SetBeta(config["Guser"]["exogam2"]["SetBeta"].as<float>());
   fExogam2->SetNFS_Parameter(config["Guser"]["exogam2"]["nfs_distance"].as<float>(), config["Guser"]["exogam2"]["nfs_gammaFlashOffset"].as<float>(), config["Guser"]["exogam2"]["nfs_gammaG"].as<float>(),config["Guser"]["exogam2"]["nfs_neutron"].as<bool>());
   fExogam2->SetNfsCrystalTimeCorrection(fNfsExoAnaCrystalTimeCorrection, fNfsExoAnaCorrectionPath);
+  for(std::size_t i=0;i<fNfsExoAnaDisabledCrystals.size();i++){
+    Int_t disabledClover=-1;
+    Int_t disabledCrystal=-1;
+    if(ParseNfsCrystalLabel(fNfsExoAnaDisabledCrystals[i],disabledClover,disabledCrystal)){
+      fExogam2->SetNfsCrystalEnabled(disabledClover,disabledCrystal,false);
+    }
+    else{
+      cerr << "NFS Exogam Warning :: ignored invalid disabled_crystals entry " << fNfsExoAnaDisabledCrystals[i] << "; expected clover-crystal, e.g. 7-1" << endl;
+    }
+  }
   fExogam2->SetNFSAnaSpec(fNfsExoAnaSpec);
  
 //------------------------REA -------------------------------------

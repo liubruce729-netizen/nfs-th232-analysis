@@ -4,6 +4,7 @@ nfs_exo_ana:
   raw_tree: false  # copy event-built MFM events into RawTree without cuts
   crystal_time_correction: false
   correction_path: "/home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne/CalFile/ecc.cal"
+  disabled_crystals: []  # EN: disable reconstruction only, e.g. ["7-1", "10-3"]; CN: 只关闭重建，保留该 crystal 自己的时间/能量谱
 
 analysis:
   filename: "ListRun.txt"

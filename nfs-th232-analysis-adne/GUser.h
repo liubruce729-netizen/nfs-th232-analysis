@@ -139,6 +139,7 @@ class GUser : public  GAcq{
   bool fNfsExoAnaRawTree;
   bool fNfsExoAnaCrystalTimeCorrection;
   TString fNfsExoAnaCorrectionPath;
+  std::vector<TString> fNfsExoAnaDisabledCrystals;
   TH1F *MergeFrameDeltaTS;
   TH1F *MergeDetectorFrameDeltaTS;
   TH1F *MFMKey;

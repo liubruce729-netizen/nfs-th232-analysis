@@ -210,6 +210,7 @@ class TExogam2 : public TDetector {
    bool GOCCE_Pat[16][4][4], GOCCE_Ener[16][4][4];
    bool CalibDone,Goccetrack,GOCCEActive,ESSActive;
    bool PSAActive, neutronNFS, NfsSpec, NfsCrystalTimeCorrection;
+   bool NfsCrystalEnabled[16*4];
    bool NfsCrystalTimeCorrectionValid[16*4];
    float NfsCrystalTimeCorrectionOffset[16*4];
    float NfsCrystalTimeCorrectionGain[16*4];
@@ -296,9 +297,11 @@ class TExogam2 : public TDetector {
    virtual bool  CheckCoreResolution(float);
    virtual bool  SetNFS_Parameter(float, float, float, bool);
    virtual bool  SetNfsCrystalTimeCorrection(bool, TString);
+   virtual bool  SetNfsCrystalEnabled(int, int, bool);
+   virtual bool  IsNfsCrystalEnabled(int, int);
    virtual bool  SetNFSAnaSpec(bool);
    virtual bool  NfsSpectraConstructor();
-   virtual void  FillNfsSpectra(Int_t, Int_t, Int_t, Float_t, Float_t);
+   virtual void  FillNfsSpectra(Int_t, Int_t, Int_t, Float_t, Float_t, Bool_t = true);
    virtual void  FillNfsCrystalEventSpectra(Bool_t*, Bool_t*, Bool_t*);
    virtual void  FillNfsCloverAddbackSpectra(Int_t, Float_t, Float_t, Float_t);
 

@@ -44,6 +44,7 @@ TExogam2::TExogam2(bool bspec)
    for(Int_t i=0;i<16*4;i++){
       fNfsCrystalDeltaT[i]=NULL;
       fNfsCrystalEnergy[i]=NULL;
+      NfsCrystalEnabled[i]=true;
       NfsCrystalTimeCorrectionValid[i]=false;
       NfsCrystalTimeCorrectionOffset[i]=0.;
       NfsCrystalTimeCorrectionGain[i]=1.;
@@ -130,6 +131,25 @@ bool TExogam2::SetPromptGate(int a, int b){
 bool TExogam2::IsCloverActive(int i)
 { 
 	return CloverPresent[i];
+}
+
+bool TExogam2::SetNfsCrystalEnabled(int clo, int cri, bool enabled)
+{
+	if(clo<0 || clo>=16 || cri<0 || cri>=4){
+		printf("\033[31mNFS Exogam Warning ::  Cannot set crystal enable for invalid crystal %d-%d \033[m \n",clo,cri);
+		return false;
+	}
+	NfsCrystalEnabled[clo*4+cri]=enabled;
+	// EN: Disabled crystals are kept in their own diagnostic spectra, but ignored by reconstruction.
+	// CN: 被关闭的 crystal 保留自己的诊断谱，但不参与重建、符合、addback 和多重度判断。
+	printf("\033[36mNFS Exogam Info ::  Crystal %d-%d %s for NFS reconstruction; own time/energy spectra are kept \033[m \n",clo,cri,enabled ? "enabled" : "disabled");
+	return true;
+}
+
+bool TExogam2::IsNfsCrystalEnabled(int clo, int cri)
+{
+	if(clo<0 || clo>=16 || cri<0 || cri>=4)return false;
+	return NfsCrystalEnabled[clo*4+cri];
 }
 bool TExogam2::ActivateGOCCETrack(bool check){
 
@@ -366,7 +386,7 @@ bool TExogam2::NfsSpectraConstructor(){
 	return true;
 }
 
-void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t timeNs, Float_t energy){
+void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t timeNs, Float_t energy, Bool_t fillGlobalSpectra){
 	if(!NfsSpec)return;
 	if(mapFinger<0 || mapFinger>=16*4)return;
 	// EN: Crystal energy spectra use the same loose condition as E877 addback: raw gamma energy > 0.
@@ -376,8 +396,8 @@ void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t tim
 	// EN: Time spectra still require a valid positive corrected Time.
 	// CN: Time 谱仍然要求修正后的 Time 为有效正值。
 	if(timeNs<=0)return;
-	if(fNfsCrystalDeltaTEnergy)fNfsCrystalDeltaTEnergy->Fill(timeNs,energy);
-	if(fNfsAllCrystalTime)fNfsAllCrystalTime->Fill(timeNs);
+	if(fillGlobalSpectra && fNfsCrystalDeltaTEnergy)fNfsCrystalDeltaTEnergy->Fill(timeNs,energy);
+	if(fillGlobalSpectra && fNfsAllCrystalTime)fNfsAllCrystalTime->Fill(timeNs);
 	if(fNfsCrystalDeltaT[mapFinger])fNfsCrystalDeltaT[mapFinger]->Fill(timeNs);
 }
 
@@ -388,6 +408,7 @@ void TExogam2::FillNfsCrystalEventSpectra(Bool_t *crystalFired, Bool_t *bgoFired
 	Int_t firedIds[16*4];
 	Int_t firedMult=0;
 	for(Int_t id=0; id<16*4; id++){
+		if(!NfsCrystalEnabled[id])continue;
 		if(!crystalFired[id])continue;
 		firedIds[firedMult++]=id;
 		// EN: TProfile stores the mean of 0/1 values, i.e. the BGO/CSI fire efficiency.
@@ -1610,8 +1631,10 @@ bool IsPrompt[16][4];
 float SumCalorimeter;
 Long64_t TS1, TS2;
 bool GateisValid;
+Int_t NfsEnabledEccMult;
 
 GateisValid=false;
+NfsEnabledEccMult=0;
 SumCalorimeter=0;
 	//------------------Time Treat
 	for(Int_t c=0;c<16;c++){
@@ -1624,6 +1647,7 @@ SumCalorimeter=0;
 	for (UShort_t i = 0; i < fExogam2Data->GetECCTMult(); i++) {
 		clo=fExogam2Data->GetECCTClover(i);
 		cri=fExogam2Data->GetECCTCristal(i);
+		if(clo<0 || clo>=16 || cri<0 || cri>=4)continue;
 		if(fExogam2Data->GetECCTTime(i)>=promptL&&fExogam2Data->GetECCTTime(i)<=promptH)IsPrompt[clo][cri]=true;
 		
 	}
@@ -1635,8 +1659,13 @@ SumCalorimeter=0;
 	*/
 	for (UShort_t i = 0; i < fExogam2Data->GetGOCCEEMult(); i++) {
 		for (UShort_t j = 0; j < fExogam2Data->GetGOCCEEMult(); j++) {
-				id1=fExogam2Data->GetGOCCEEClover(i)*16+fExogam2Data->GetGOCCEECristal(i)*10+fExogam2Data->GetGOCCEESegment(i);
-				id2=fExogam2Data->GetGOCCEEClover(j)*16+fExogam2Data->GetGOCCEECristal(j)*10+fExogam2Data->GetGOCCEESegment(j);
+				clo1=fExogam2Data->GetGOCCEEClover(i);
+				cri1=fExogam2Data->GetGOCCEECristal(i);
+				clo2=fExogam2Data->GetGOCCEEClover(j);
+				cri2=fExogam2Data->GetGOCCEECristal(j);
+				if(!IsNfsCrystalEnabled(clo1,cri1) || !IsNfsCrystalEnabled(clo2,cri2))continue;
+				id1=clo1*16+cri1*10+fExogam2Data->GetGOCCEESegment(i);
+				id2=clo2*16+cri2*10+fExogam2Data->GetGOCCEESegment(j);
 				if(id1!=id2&&BoolSpec&&fExogam2Data->GetGOCCEEEnergy(i)>100&&fExogam2Data->GetGOCCEEEnergy(j)>100&&BoolSpec){fMyHistoSegSeg->Fill(id1,id2);}
 		}
 	}
@@ -1649,6 +1678,7 @@ SumCalorimeter=0;
 					cri1=fExogam2Data->GetECCECristal(i);
 					clo2=fExogam2Data->GetECCEClover(j);
 					cri2=fExogam2Data->GetECCECristal(j);
+					if(!IsNfsCrystalEnabled(clo1,cri1) || !IsNfsCrystalEnabled(clo2,cri2))continue;
 					if(BoolSpec&&fExogam2Data->GetECCEEnergy(i)>0&&fExogam2Data->GetECCEEnergy(j)>0&&IsPrompt[clo1][cri1]&&IsPrompt[clo2][cri2]){
 						id1=fExogam2Data->GetECCEDetNbr(i);
 						id2=fExogam2Data->GetECCEDetNbr(j);
@@ -1691,10 +1721,22 @@ SumCalorimeter=0;
 		cri=fExogam2Data->GetECCECristal(i);
 		//cerr<<clo<<" IN "<<cri<<endl;
 	        
+		if(clo<0 || clo>=16 || cri<0 || cri>=4)continue;
 		if(IsCloverActive(clo)==false){continue;}
 		
 		//cerr<<clo<<" OUT "<<cri<<endl;
 
+		Int_t nfsCrystalId=clo*4+cri;
+		Bool_t nfsCrystalEnabled=IsNfsCrystalEnabled(clo,cri);
+		Float_t nfsEnergy=fExogam2Data->GetECCEEnergy(i);
+		Float_t nfsTime=0.;
+		if(i<fExogam2Data->GetTimeMult())nfsTime=fExogam2Data->GetTime(i);
+		// EN: Disabled crystals keep only their own time/energy spectra; global spectra and reconstruction skip them.
+		// CN: 被关闭的 crystal 只保留自己的时间/能量谱；全局谱和后续重建都会跳过它。
+		if(nfsCrystalId>=0 && nfsCrystalId<16*4)FillNfsSpectra(nfsCrystalId,clo,cri,nfsTime,nfsEnergy,nfsCrystalEnabled);
+		if(!nfsCrystalEnabled)continue;
+
+		NfsEnabledEccMult++;
 		mulCrysPerClover[clo]++;
 		mulECC[clo][cri]++;
 		if(mulG[clo][cri]==4)mulECCG[clo][cri]++;
@@ -1703,10 +1745,9 @@ SumCalorimeter=0;
 		//     The threshold here is only energy > 0, to reject empty/zero gamma deposits.
 		// CN: NFS E877 合并直接把 raw crystal fire 按 clover 分组，不套 prompt/AC 判断。
 		//     这里唯一能量阈值是 energy > 0，用来排除空/零能量 gamma 沉积。
-		if(fExogam2Data->GetECCEEnergy(i)>0){
-			Float_t e877Energy=fExogam2Data->GetECCEEnergy(i);
-			Float_t e877Time=0.;
-			if(i<fExogam2Data->GetTimeMult())e877Time=fExogam2Data->GetTime(i);
+		if(nfsEnergy>0){
+			Float_t e877Energy=nfsEnergy;
+			Float_t e877Time=nfsTime;
 
 			E877CloverFired[clo]=true;
 			E877CloverE[clo]+=e877Energy;
@@ -1721,16 +1762,12 @@ SumCalorimeter=0;
 				E877CloverCSI[clo]+=fExogam2Data->GetESSTQCSI(i);
 			}
 
-			Int_t nfsCrystalId=clo*4+cri;
-			if(nfsCrystalId>=0 && nfsCrystalId<16*4){
-				FillNfsSpectra(nfsCrystalId,clo,cri,e877Time,e877Energy);
-				// EN: Event-level crystal fire for cross-talk and BGO/CSI efficiency, with zero-energy fires skipped.
-				// CN: 用于串扰和 BGO/CSI 效率的 event 级 crystal fire，跳过零能量 fire。
-				NfsCrystalFired[nfsCrystalId]=true;
-				if(i<fExogam2Data->GetESSTQMult()){
-					if(fExogam2Data->GetESSTQBGO(i)>0)NfsCrystalBgoFired[nfsCrystalId]=true;
-					if(fExogam2Data->GetESSTQCSI(i)>0)NfsCrystalCsiFired[nfsCrystalId]=true;
-				}
+			// EN: Event-level crystal fire for cross-talk and BGO/CSI efficiency, with zero-energy fires skipped.
+			// CN: 用于串扰和 BGO/CSI 效率的 event 级 crystal fire，跳过零能量 fire。
+			NfsCrystalFired[nfsCrystalId]=true;
+			if(i<fExogam2Data->GetESSTQMult()){
+				if(fExogam2Data->GetESSTQBGO(i)>0)NfsCrystalBgoFired[nfsCrystalId]=true;
+				if(fExogam2Data->GetESSTQCSI(i)>0)NfsCrystalCsiFired[nfsCrystalId]=true;
 			}
 		}
 		//cerr<<mulGnrj[clo][cri]<<endl;
@@ -1827,7 +1864,7 @@ SumCalorimeter=0;
 		}
 	}
 
-	if(BoolSpec)fMyHistoMultiCrystal->Fill(fExogam2Data->GetECCEMult());
+	if(BoolSpec)fMyHistoMultiCrystal->Fill(NfsEnabledEccMult);
 	if(BoolSpec)fMyHistoMultiAntiCompt->Fill(fExogam2Data->GetESSTQMult());
 
 	//------------------Final Treat
