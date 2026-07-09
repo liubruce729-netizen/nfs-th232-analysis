@@ -44,6 +44,12 @@ TExogam2::TExogam2(bool bspec)
    for(Int_t i=0;i<16*4;i++){
       fNfsCrystalDeltaT[i]=NULL;
       fNfsCrystalEnergy[i]=NULL;
+      fNfsCrystalBgoEnergy[i]=NULL;
+      fNfsCrystalCsiEnergy[i]=NULL;
+      fNfsCrystalEnergyBgoFire[i]=NULL;
+      fNfsCrystalEnergyBgoVeto[i]=NULL;
+      fNfsCrystalEnergyCsiFire[i]=NULL;
+      fNfsCrystalEnergyCsiVeto[i]=NULL;
       NfsCrystalEnabled[i]=true;
       NfsCrystalTimeCorrectionValid[i]=false;
       NfsCrystalTimeCorrectionOffset[i]=0.;
@@ -370,6 +376,38 @@ bool TExogam2::NfsSpectraConstructor(){
 			sprintf(title,"Clover%d Crystal%d Gamma Energy;Energy (keV);Counts",clo,cri);
 			fNfsCrystalEnergy[id]=new TH1F(name,title,4000,0,20000);
 			HListNfsExogam2.Add(fNfsCrystalEnergy[id]);
+
+			// EN: Crystal-level BGO/CSI diagnostics and gamma spectra gated by BGO/CSI fire.
+			// CN: crystal 级 BGO/CSI 诊断谱，以及按 BGO/CSI fire/veto 分开的 gamma 能谱。
+			sprintf(name,"nfs_clover%d_crystal%d_bgo_energy",clo,cri);
+			sprintf(title,"Clover%d Crystal%d BGO Energy;BGO energy (channel);Counts",clo,cri);
+			fNfsCrystalBgoEnergy[id]=new TH1F(name,title,4000,0,16000);
+			HListNfsExogam2.Add(fNfsCrystalBgoEnergy[id]);
+
+			sprintf(name,"nfs_clover%d_crystal%d_csi_energy",clo,cri);
+			sprintf(title,"Clover%d Crystal%d CSI Energy;CSI energy (channel);Counts",clo,cri);
+			fNfsCrystalCsiEnergy[id]=new TH1F(name,title,4000,0,16000);
+			HListNfsExogam2.Add(fNfsCrystalCsiEnergy[id]);
+
+			sprintf(name,"nfs_clover%d_crystal%d_gamma_bgo_fire",clo,cri);
+			sprintf(title,"Clover%d Crystal%d Gamma with BGO fire;Gamma energy (keV);Counts",clo,cri);
+			fNfsCrystalEnergyBgoFire[id]=new TH1F(name,title,4000,0,20000);
+			HListNfsExogam2.Add(fNfsCrystalEnergyBgoFire[id]);
+
+			sprintf(name,"nfs_clover%d_crystal%d_gamma_bgo_veto",clo,cri);
+			sprintf(title,"Clover%d Crystal%d Gamma with BGO veto;Gamma energy (keV);Counts",clo,cri);
+			fNfsCrystalEnergyBgoVeto[id]=new TH1F(name,title,4000,0,20000);
+			HListNfsExogam2.Add(fNfsCrystalEnergyBgoVeto[id]);
+
+			sprintf(name,"nfs_clover%d_crystal%d_gamma_csi_fire",clo,cri);
+			sprintf(title,"Clover%d Crystal%d Gamma with CSI fire;Gamma energy (keV);Counts",clo,cri);
+			fNfsCrystalEnergyCsiFire[id]=new TH1F(name,title,4000,0,20000);
+			HListNfsExogam2.Add(fNfsCrystalEnergyCsiFire[id]);
+
+			sprintf(name,"nfs_clover%d_crystal%d_gamma_csi_veto",clo,cri);
+			sprintf(title,"Clover%d Crystal%d Gamma with CSI veto;Gamma energy (keV);Counts",clo,cri);
+			fNfsCrystalEnergyCsiVeto[id]=new TH1F(name,title,4000,0,20000);
+			HListNfsExogam2.Add(fNfsCrystalEnergyCsiVeto[id]);
 		}
 
 		sprintf(name,"nfs_clover%d_addback_gamma",clo);
@@ -386,13 +424,29 @@ bool TExogam2::NfsSpectraConstructor(){
 	return true;
 }
 
-void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t timeNs, Float_t energy, Bool_t fillGlobalSpectra){
+void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t timeNs, Float_t energy, Float_t bgo, Float_t csi, Bool_t fillGlobalSpectra){
 	if(!NfsSpec)return;
 	if(mapFinger<0 || mapFinger>=16*4)return;
 	// EN: Crystal energy spectra use the same loose condition as E877 addback: raw gamma energy > 0.
 	// CN: Crystal 能量谱采用和 E877 addback 一致的宽松条件：raw gamma 能量 > 0。
 	if(energy<=0)return;
 	if(fNfsCrystalEnergy[mapFinger])fNfsCrystalEnergy[mapFinger]->Fill(energy);
+	// EN: BGO/CSI fire means a strictly positive stored energy; missing ESS entries are passed as zero.
+	// CN: BGO/CSI fire 定义为存储能量严格大于 0；没有 ESS 条目时按 0 处理。
+	if(bgo>0){
+		if(fNfsCrystalBgoEnergy[mapFinger])fNfsCrystalBgoEnergy[mapFinger]->Fill(bgo);
+		if(fNfsCrystalEnergyBgoFire[mapFinger])fNfsCrystalEnergyBgoFire[mapFinger]->Fill(energy);
+	}
+	else{
+		if(fNfsCrystalEnergyBgoVeto[mapFinger])fNfsCrystalEnergyBgoVeto[mapFinger]->Fill(energy);
+	}
+	if(csi>0){
+		if(fNfsCrystalCsiEnergy[mapFinger])fNfsCrystalCsiEnergy[mapFinger]->Fill(csi);
+		if(fNfsCrystalEnergyCsiFire[mapFinger])fNfsCrystalEnergyCsiFire[mapFinger]->Fill(energy);
+	}
+	else{
+		if(fNfsCrystalEnergyCsiVeto[mapFinger])fNfsCrystalEnergyCsiVeto[mapFinger]->Fill(energy);
+	}
 	// EN: Time spectra still require a valid positive corrected Time.
 	// CN: Time 谱仍然要求修正后的 Time 为有效正值。
 	if(timeNs<=0)return;
@@ -1730,10 +1784,16 @@ SumCalorimeter=0;
 		Bool_t nfsCrystalEnabled=IsNfsCrystalEnabled(clo,cri);
 		Float_t nfsEnergy=fExogam2Data->GetECCEEnergy(i);
 		Float_t nfsTime=0.;
+		Float_t nfsBgo=0.;
+		Float_t nfsCsi=0.;
 		if(i<fExogam2Data->GetTimeMult())nfsTime=fExogam2Data->GetTime(i);
-		// EN: Disabled crystals keep only their own time/energy spectra; global spectra and reconstruction skip them.
-		// CN: 被关闭的 crystal 只保留自己的时间/能量谱；全局谱和后续重建都会跳过它。
-		if(nfsCrystalId>=0 && nfsCrystalId<16*4)FillNfsSpectra(nfsCrystalId,clo,cri,nfsTime,nfsEnergy,nfsCrystalEnabled);
+		if(i<fExogam2Data->GetESSTQMult()){
+			nfsBgo=fExogam2Data->GetESSTQBGO(i);
+			nfsCsi=fExogam2Data->GetESSTQCSI(i);
+		}
+		// EN: Disabled crystals keep only their own time/energy/BGO/CSI spectra; global spectra and reconstruction skip them.
+		// CN: 被关闭的 crystal 只保留自己的时间、能量、BGO/CSI 诊断谱；全局谱和后续重建都会跳过它。
+		if(nfsCrystalId>=0 && nfsCrystalId<16*4)FillNfsSpectra(nfsCrystalId,clo,cri,nfsTime,nfsEnergy,nfsBgo,nfsCsi,nfsCrystalEnabled);
 		if(!nfsCrystalEnabled)continue;
 
 		NfsEnabledEccMult++;

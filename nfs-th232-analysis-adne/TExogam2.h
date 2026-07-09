@@ -172,6 +172,12 @@ class TExogam2 : public TDetector {
    TH1F * fNfsAllCrystalTime;
    TH1F * fNfsCrystalDeltaT[16*4];
    TH1F * fNfsCrystalEnergy[16*4];
+   TH1F * fNfsCrystalBgoEnergy[16*4];
+   TH1F * fNfsCrystalCsiEnergy[16*4];
+   TH1F * fNfsCrystalEnergyBgoFire[16*4];
+   TH1F * fNfsCrystalEnergyBgoVeto[16*4];
+   TH1F * fNfsCrystalEnergyCsiFire[16*4];
+   TH1F * fNfsCrystalEnergyCsiVeto[16*4];
    // EN/CN: Event-level crystal diagnostics: cross-talk matrix and BGO/CSI fire efficiencies.
    TH2F * fNfsCrystalCrossTalk;
    TProfile * fNfsCrystalBgoEfficiency;
@@ -301,7 +307,7 @@ class TExogam2 : public TDetector {
    virtual bool  IsNfsCrystalEnabled(int, int);
    virtual bool  SetNFSAnaSpec(bool);
    virtual bool  NfsSpectraConstructor();
-   virtual void  FillNfsSpectra(Int_t, Int_t, Int_t, Float_t, Float_t, Bool_t = true);
+   virtual void  FillNfsSpectra(Int_t, Int_t, Int_t, Float_t, Float_t, Float_t, Float_t, Bool_t = true);
    virtual void  FillNfsCrystalEventSpectra(Bool_t*, Bool_t*, Bool_t*);
    virtual void  FillNfsCloverAddbackSpectra(Int_t, Float_t, Float_t, Float_t);
 

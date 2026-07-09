@@ -578,6 +578,12 @@ void GUser::InitUser()
         int id=clo*4+cri;
         MySpectraList->AddSpectrum(fExogam2->fNfsCrystalDeltaT[id],"NFS/Crystal_Time");
         MySpectraList->AddSpectrum(fExogam2->fNfsCrystalEnergy[id],"NFS/Crystal_Energy");
+        MySpectraList->AddSpectrum(fExogam2->fNfsCrystalBgoEnergy[id],"NFS/Crystal_BGO");
+        MySpectraList->AddSpectrum(fExogam2->fNfsCrystalCsiEnergy[id],"NFS/Crystal_CSI");
+        MySpectraList->AddSpectrum(fExogam2->fNfsCrystalEnergyBgoFire[id],"NFS/Crystal_Energy_BGO");
+        MySpectraList->AddSpectrum(fExogam2->fNfsCrystalEnergyBgoVeto[id],"NFS/Crystal_Energy_BGO");
+        MySpectraList->AddSpectrum(fExogam2->fNfsCrystalEnergyCsiFire[id],"NFS/Crystal_Energy_CSI");
+        MySpectraList->AddSpectrum(fExogam2->fNfsCrystalEnergyCsiVeto[id],"NFS/Crystal_Energy_CSI");
       }
     }
   }
