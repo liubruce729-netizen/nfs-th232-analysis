@@ -143,6 +143,37 @@ Main outputs:
 - `<prefix>.txt`: detailed peak, energy-calibration, and time-fit table / 详细峰位、能量刻度和时间拟合表
 - `<prefix>_ecc_cal_candidate.txt`: 64 energy lines plus 64 time lines in `offset gain gain2` format / 接近 `ecc.cal` 的候选格式，前 64 行能量，后 64 行时间
 
+批量执行多个 ROOT 文件刻度时，可以使用外层脚本。每个输入会独立调用一次 ROOT 宏，并写出一个 TSV 列表，记录每个输入对应的 `.root`、`.txt` 和 `_ecc_cal_candidate.txt`。
+For batch calibration, use the wrapper script below. Each input is calibrated by one ROOT macro call, and a TSV manifest records the corresponding `.root`, `.txt`, and `_ecc_cal_candidate.txt` outputs.
+
+```bash
+cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
+source /home/user0/work/IJCLAB/NFS/NFS_env.sh
+
+./lsy_nfs/batch_calibrate_nfs_crystals.sh \
+  --out-dir out/calibration_run23 \
+  out/nfs_run_23_r0.root out/nfs_run_23_r1.root
+```
+
+也可以把输入 ROOT 文件逐行写入列表：
+Inputs can also be passed via a text list:
+
+```bash
+./lsy_nfs/batch_calibrate_nfs_crystals.sh \
+  --input-list out/nfs_run_files.txt \
+  --out-dir out/calibration_all \
+  --manifest out/calibration_all/calibration_outputs.tsv \
+  --max-entries -1 \
+  --time-branch fDeltaT
+```
+
+默认 manifest 列格式：
+Default manifest columns:
+
+```text
+index input output_prefix output_root output_txt output_ecc log status
+```
+
 ## Fission Event Analysis / 裂变事件分析
 
 基于 ADNE 新产生的 `mult3_nfs_*.root` 文件，读取 `TreeMaster` 中的 `f_E877_Clover_*` 分支，对 veto 后且时间 cut 后仍满足 clover 多重度默认为 `>=2` 的事件做分 bin gamma 谱、gamma-gamma 符合矩阵，以及 clover gamma 能量-时间二维图。
