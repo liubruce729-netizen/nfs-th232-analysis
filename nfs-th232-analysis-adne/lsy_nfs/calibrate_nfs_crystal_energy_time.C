@@ -4,13 +4,13 @@
 // Usage / 用法:
 //   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("out/nfs_run_23_r0.root")'
 //   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("out/nfs_run_23_r0.root,out/nfs_run_24_r0.root","out/run23_24_cal")'
-//   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("@out/nfs_run_files.txt","out/run_cal",-1,"fDeltaT")'
+//   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("@out/nfs_run_files.txt","out/run_cal",-1,"fTime")'
 //
 // EN: Energy spectra are rebuilt with 0.5-channel bins in [0,4096].
 //     Peaks are fitted with Gaussian + linear background.
-//     Time spectra use fDeltaT by default and fit the strongest peak below 800 ns with Gaussian + exponential tail.
+//     Time spectra use fTime by default and fit the strongest peak below 800 ns with Gaussian + exponential tail.
 // CN: 能量谱重新按 0.5/bin、[0,4096] 建谱；峰形采用高斯 + 直线本底拟合。
-//     时间谱默认使用 fDeltaT，在 800 ns 以内找最高峰，采用高斯 + 指数尾部拟合。
+//     时间谱默认使用 fTime，在 800 ns 以内找最高峰，采用高斯 + 指数尾部拟合。
 
 #include <algorithm>
 #include <cmath>
@@ -101,6 +101,11 @@ Double_t TimeFitFunction(Double_t *x, Double_t *p)
   double value = p[0] * TMath::Gaus(xx, p[1], p[2], false);
   if (xx >= p[1] && p[4] > 0.0) value += p[3] * TMath::Exp(-(xx - p[1]) / p[4]);
   return value;
+}
+
+Double_t TimeGaussianFunction(Double_t *x, Double_t *p)
+{
+  return p[0] * TMath::Gaus(x[0], p[1], p[2], false);
 }
 
 std::vector<TString> ReadFileList(const TString &listPath)
@@ -231,7 +236,7 @@ PeakFitResult FitEnergyPeak(TH1F *hist, const PeakRequest &request, int detector
   fit->SetParLimits(2, 0.15, fitHalfWidth);
   fit->SetLineColor(kRed + detector % 4);
 
-  TFitResultPtr fitResult = hist->Fit(fit, "QRS0");
+  TFitResultPtr fitResult = hist->Fit(fit, "QRS0+");
   result.status = int(fitResult);
   result.mean = fit->GetParameter(1);
   result.meanErr = fit->GetParError(1);
@@ -256,21 +261,57 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   const double seedContent = hist->GetBinContent(seedBin);
   result.seed = seed;
 
-  const double fitLow = std::max(kTimeMin, seed - fitPre);
-  const double fitHigh = std::min(kTimeMax, seed + fitPost);
+  // EN: First lock the peak with a narrow Gaussian-only fit. This prevents the
+  //     exponential tail from absorbing the prompt peak and moving the centroid.
+  // CN: 先用窄窗口纯高斯锁定峰位，避免后续指数尾部吞掉 prompt 峰并拖动峰心。
+  const double gaussianHalfWidth = std::min(12.0, std::max(4.0, fitPre * 0.5));
+  const double gaussianLow = std::max(kTimeMin, seed - gaussianHalfWidth);
+  const double gaussianHigh = std::min(searchHigh, seed + gaussianHalfWidth);
+  if (gaussianHigh <= gaussianLow) return result;
+
+  TF1 *gaussianFit = new TF1(TString::Format("fit_time_gaussian_seed_det%d", detector),
+                             TimeGaussianFunction, gaussianLow, gaussianHigh, 3);
+  gaussianFit->SetParNames("GausAmp", "GausMean", "GausSigma");
+  gaussianFit->SetParameters(std::max(1.0, seedContent), seed, 2.0);
+  gaussianFit->SetParLimits(0, std::max(0.1, seedContent * 0.05), std::max(10.0, seedContent * 5.0));
+  gaussianFit->SetParLimits(1, gaussianLow, gaussianHigh);
+  gaussianFit->SetParLimits(2, 0.15, gaussianHalfWidth);
+  gaussianFit->SetLineColor(kGreen + 2);
+  gaussianFit->SetLineStyle(2);
+
+  TFitResultPtr gaussianResult = hist->Fit(gaussianFit, "QRS0+");
+  double lockedAmp = gaussianFit->GetParameter(0);
+  double lockedMean = gaussianFit->GetParameter(1);
+  double lockedSigma = std::fabs(gaussianFit->GetParameter(2));
+  if (int(gaussianResult) != 0 || !std::isfinite(lockedMean) ||
+      lockedMean < gaussianLow || lockedMean > gaussianHigh ||
+      !std::isfinite(lockedSigma) || lockedSigma <= 0.0) {
+    lockedAmp = std::max(1.0, seedContent);
+    lockedMean = seed;
+    lockedSigma = 2.0;
+  }
+
+  const double fitLow = std::max(kTimeMin, lockedMean - fitPre);
+  const double fitHigh = std::min(kTimeMax, lockedMean + fitPost);
   if (fitHigh <= fitLow) return result;
 
   TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 5);
   fit->SetParNames("Amp", "Mean", "Sigma", "TailAmp", "Tau");
-  fit->SetParameters(std::max(1.0, seedContent), seed, 4.0, std::max(0.1, seedContent * 0.2), 30.0);
-  fit->SetParLimits(0, 0.0, std::max(10.0, seedContent * 50.0));
-  fit->SetParLimits(1, std::max(kTimeMin, seed - fitPre), std::min(searchHigh, seed + fitPre));
-  fit->SetParLimits(2, 0.1, 40.0);
-  fit->SetParLimits(3, 0.0, std::max(10.0, seedContent * 50.0));
-  fit->SetParLimits(4, 1.0, 500.0);
+  fit->SetParameters(lockedAmp, lockedMean, lockedSigma, std::max(0.1, lockedAmp * 0.05), 30.0);
+
+  const double meanGuard = std::max(2.0, lockedSigma * 1.5);
+  const double sigmaLow = std::max(0.10, lockedSigma * 0.35);
+  const double sigmaHigh = std::min(30.0, std::max(lockedSigma * 2.5, lockedSigma + 1.0));
+  fit->SetParLimits(0, std::max(0.1, lockedAmp * 0.25), std::max(10.0, lockedAmp * 4.0));
+  fit->SetParLimits(1, std::max(kTimeMin, lockedMean - meanGuard), std::min(searchHigh, lockedMean + meanGuard));
+  fit->SetParLimits(2, sigmaLow, sigmaHigh);
+  // EN: The tail is a small correction after the Gaussian centroid, not the main peak.
+  // CN: 指数尾部只是高斯峰后的一个小修正，不允许替代主峰。
+  fit->SetParLimits(3, 0.0, std::max(1.0, lockedAmp * 0.35));
+  fit->SetParLimits(4, 2.0, 500.0);
   fit->SetLineColor(kBlue + detector % 4);
 
-  TFitResultPtr fitResult = hist->Fit(fit, "QRS0");
+  TFitResultPtr fitResult = hist->Fit(fit, "QRS0+");
   result.status = int(fitResult);
   result.mean = fit->GetParameter(1);
   result.meanErr = fit->GetParError(1);
@@ -330,38 +371,69 @@ void DrawCrystalCanvas(TDirectory *dir, int det, TH1F *energy, TH1F *time,
                                 1400, 900);
   canvas->Divide(2, 2);
 
-  canvas->cd(1);
-  if (energy) {
-    energy->Draw("hist");
-    for (const auto &obj : *energy->GetListOfFunctions()) obj->Draw("same");
-  }
+  auto drawEnergyPanel = [&](int pad, double low, double high, int selectedPeak) {
+    canvas->cd(pad);
+    if (!energy) return;
 
-  for (std::size_t i = 0; i < requests.size() && i < 3; ++i) {
-    canvas->cd(static_cast<int>(i) + 2);
-    if (!energy) continue;
-    energy->GetXaxis()->SetRangeUser(requests[i].searchLow, requests[i].searchHigh);
-    energy->Draw("hist");
-    for (const auto &obj : *energy->GetListOfFunctions()) obj->Draw("same");
+    // EN: Each pad gets an independent clone. Otherwise ROOT stores the same
+    //     histogram object in all pads and the final SetRangeUser wins.
+    // CN: 每个 pad 画独立 clone；否则 ROOT 会让所有 pad 共享同一个 histogram，
+    //     最后一次 SetRangeUser 会覆盖前面三个窗口。
+    TH1F *copy = static_cast<TH1F *>(energy->Clone(TString::Format("%s_pad%d_det%d", energy->GetName(), pad, det)));
+    copy->SetDirectory(nullptr);
+    copy->GetListOfFunctions()->Clear();
+    if (high > low) copy->GetXaxis()->SetRangeUser(low, high);
+    copy->Draw("hist");
+
     TLegend *legend = new TLegend(0.55, 0.72, 0.90, 0.90);
     legend->SetBorderSize(0);
     legend->SetFillStyle(0);
-    legend->AddEntry(energy, requests[i].label, "l");
-    if (energyFits[i].ok) legend->AddEntry((TObject *)nullptr, TString::Format("mean %.3f", energyFits[i].mean), "");
+
+    if (selectedPeak >= 0 && selectedPeak < static_cast<int>(requests.size())) {
+      const auto &req = requests[selectedPeak];
+      legend->AddEntry(copy, req.label, "l");
+      TF1 *fit = energy->GetFunction(TString::Format("fit_energy_%s_det%d", req.label.Data(), det));
+      if (fit) fit->DrawCopy("same");
+      if (selectedPeak < static_cast<int>(energyFits.size()) && energyFits[selectedPeak].ok) {
+        legend->AddEntry((TObject *)nullptr, TString::Format("mean %.3f", energyFits[selectedPeak].mean), "");
+      }
+    }
+    else {
+      legend->AddEntry(copy, "Raw energy", "l");
+      for (std::size_t i = 0; i < requests.size(); ++i) {
+        TF1 *fit = energy->GetFunction(TString::Format("fit_energy_%s_det%d", requests[i].label.Data(), det));
+        if (fit) fit->DrawCopy("same");
+      }
+    }
     legend->Draw();
+  };
+
+  drawEnergyPanel(1, kEnergyMin, kEnergyMax, -1);
+  for (std::size_t i = 0; i < requests.size() && i < 3; ++i) {
+    drawEnergyPanel(static_cast<int>(i) + 2, requests[i].searchLow, requests[i].searchHigh, static_cast<int>(i));
   }
   canvas->Write();
-  if (energy) energy->GetXaxis()->UnZoom();
 
   TCanvas *timeCanvas = new TCanvas(TString::Format("c_time_cal_clover%d_crystal%d", clo, cri),
                                     TString::Format("Clover%d Crystal%d time calibration", clo, cri),
                                     1000, 700);
   if (time) {
-    time->Draw("hist");
-    for (const auto &obj : *time->GetListOfFunctions()) obj->Draw("same");
+    TH1F *timeCopy = static_cast<TH1F *>(time->Clone(TString::Format("%s_canvas_det%d", time->GetName(), det)));
+    timeCopy->SetDirectory(nullptr);
+    timeCopy->GetListOfFunctions()->Clear();
+    timeCopy->Draw("hist");
+
+    TF1 *gaussianFit = time->GetFunction(TString::Format("fit_time_gaussian_seed_det%d", det));
+    if (gaussianFit) gaussianFit->DrawCopy("same");
+    TF1 *finalFit = time->GetFunction(TString::Format("fit_time_det%d", det));
+    if (finalFit) finalFit->DrawCopy("same");
+
     TLegend *legend = new TLegend(0.55, 0.72, 0.90, 0.90);
     legend->SetBorderSize(0);
     legend->SetFillStyle(0);
-    legend->AddEntry(time, "Time spectrum", "l");
+    legend->AddEntry(timeCopy, "Time spectrum", "l");
+    if (gaussianFit) legend->AddEntry(gaussianFit, "Gaussian seed fit", "l");
+    if (finalFit) legend->AddEntry(finalFit, "Gaussian + small tail", "l");
     if (timeFit.ok) {
       legend->AddEntry((TObject *)nullptr, TString::Format("peak %.3f ns", timeFit.mean), "");
       legend->AddEntry((TObject *)nullptr, TString::Format("offset %.3f ns", kTargetTimeNs - timeFit.mean), "");
@@ -435,7 +507,7 @@ void WriteEccCandidate(const TString &path,
 void calibrate_nfs_crystal_energy_time(const char *inputFiles,
                                        const char *outputPrefix = "",
                                        Long64_t maxEntries = -1,
-                                       const char *timeBranchLeaf = "fDeltaT",
+                                       const char *timeBranchLeaf = "fTime",
                                        double energyFitHalfWidth = kDefaultEnergyFitHalfWidth,
                                        double timeSearchHighNs = 800.0)
 {

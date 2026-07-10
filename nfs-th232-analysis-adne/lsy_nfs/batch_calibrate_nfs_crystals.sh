@@ -13,7 +13,7 @@ set -u
 #     --input-list out/nfs_run_files.txt \
 #     --out-dir out/calibration_all \
 #     --max-entries -1 \
-#     --time-branch fDeltaT
+#     --time-branch fTime
 #
 # The manifest TSV records all output files for downstream reading.
 # manifest TSV 会记录每个输入对应的输出文件，方便后续读取。
@@ -33,7 +33,7 @@ Options:
   --manifest FILE           Output manifest TSV. Default: <out-dir>/calibration_outputs.tsv
   --macro FILE              ROOT macro path. Default: this_dir/calibrate_nfs_crystal_energy_time.C
   --max-entries N           Entries per calibration task. Default: -1
-  --time-branch NAME        Time branch leaf name. Default: fDeltaT
+  --time-branch NAME        Time branch leaf name. Default: fTime
   --energy-fit-half-width V Energy peak fit half width. Default: 25
   --time-search-high V      Upper bound for time peak search in ns. Default: 800
   --root CMD                ROOT executable. Default: root
@@ -67,7 +67,7 @@ out_dir="nfs_crystal_calibration_batch"
 manifest=""
 macro="${script_dir}/calibrate_nfs_crystal_energy_time.C"
 max_entries="-1"
-time_branch="fDeltaT"
+time_branch="fTime"
 energy_fit_half_width="25"
 time_search_high_ns="800"
 root_cmd="root"

@@ -106,8 +106,8 @@ Default energy peak windows:
 每个峰用 `Gaussian + linear background` 拟合，然后用 `E_cal = offset + gain * E_raw` 做线性刻度。
 Each peak is fitted with `Gaussian + linear background`, then a linear calibration `E_cal = offset + gain * E_raw` is produced.
 
-时间谱默认使用 `fDeltaT`。在 `0-800 ns` 内找最高峰，用 `Gaussian + exponential tail` 拟合，其中指数尾部从高斯中心开始。输出中同时给出 `time_offset_to_442_ns = 442 - peak` 和 `time_gain_to_442 = 442 / peak`。
-The default time branch is `fDeltaT`. The strongest peak below `800 ns` is fitted with `Gaussian + exponential tail`, where the exponential tail starts at the Gaussian mean. The output includes both `time_offset_to_442_ns = 442 - peak` and `time_gain_to_442 = 442 / peak`.
+时间谱默认使用 `fTime`。在 `0-800 ns` 内找最高峰，用 `Gaussian + exponential tail` 拟合，其中指数尾部从高斯中心开始。输出中同时给出 `time_offset_to_442_ns = 442 - peak` 和 `time_gain_to_442 = 442 / peak`。
+The default time branch is `fTime`. The strongest peak below `800 ns` is fitted with `Gaussian + exponential tail`, where the exponential tail starts at the Gaussian mean. The output includes both `time_offset_to_442_ns = 442 - peak` and `time_gain_to_442 = 442 / peak`.
 
 ```bash
 cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
@@ -120,7 +120,7 @@ Multiple files can be comma-separated or passed via `@filelist.txt`:
 
 ```bash
 root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("out/nfs_run_23_r0.root,out/nfs_run_24_r0.root","out/run23_24_cal")'
-root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("@out/nfs_run_files.txt","out/run_cal",-1,"fDeltaT")'
+root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("@out/nfs_run_files.txt","out/run_cal",-1,"fTime")'
 ```
 
 参数顺序：
@@ -164,7 +164,7 @@ Inputs can also be passed via a text list:
   --out-dir out/calibration_all \
   --manifest out/calibration_all/calibration_outputs.tsv \
   --max-entries -1 \
-  --time-branch fDeltaT
+  --time-branch fTime
 ```
 
 默认 manifest 列格式：
