@@ -174,6 +174,19 @@ Default manifest columns:
 index input output_prefix output_root output_txt output_ecc log status
 ```
 
+如果需要先从一个输出目录及其子目录自动生成 `nfs_run_*_r*.root` 输入列表，可以使用：
+To generate an input list from an output directory recursively:
+
+```bash
+./lsy_nfs/list_nfs_run_roots.sh \
+  --absolute \
+  --output out/nfs_run_files.txt \
+  /data/e877_anaX/July8beamLsy/run30
+```
+
+默认只匹配 `nfs_run_*_r*.root`，不会包含 `mult3_nfs_run_*.root` 或 `nfs_histoExogam2_*.root`。
+By default it only matches `nfs_run_*_r*.root`, excluding `mult3_nfs_run_*.root` and `nfs_histoExogam2_*.root`.
+
 ## Fission Event Analysis / 裂变事件分析
 
 基于 ADNE 新产生的 `mult3_nfs_*.root` 文件，读取 `TreeMaster` 中的 `f_E877_Clover_*` 分支，对 veto 后且时间 cut 后仍满足 clover 多重度默认为 `>=2` 的事件做分 bin gamma 谱、gamma-gamma 符合矩阵，以及 clover gamma 能量-时间二维图。
