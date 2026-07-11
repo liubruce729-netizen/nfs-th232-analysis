@@ -213,8 +213,8 @@ inputMfmFile, startEvent, maxEvents, binWidthNs, outputFile, unfoldMerge, tsTick
 默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的按 TS 排序 `delta_ts` 图、按读取/展开顺序填充的 `*_delta_ts_read_order` 图、`mfm_frame_type_counts`，以及 `mfm_frame_table`。sorted 图会先排序 TS，因此间隔全为正；read-order 图不排序，用来检查原始文件/merge 展开顺序，可能出现负值。
 The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, TS-sorted `delta_ts` histograms, read/unfold-order `*_delta_ts_read_order` histograms, `mfm_frame_type_counts`, and `mfm_frame_table`. Sorted histograms sort TS first, so intervals are positive; read-order histograms keep the original file/unfolding order and may contain negative values.
 
-每个 EXO2 crystal 的图放在 `exo2_crystal_ts/` 目录下，按原始 `board id - trigger/crystal channel id` 分组，包含 `mfm_exo2_boardXXX_crystalYY_ts_distribution`、`mfm_exo2_boardXXX_crystalYY_delta_ts_sorted` 和 `mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`。
-Per-crystal EXO2 plots are stored in `exo2_crystal_ts/`, grouped by raw `board id - trigger/crystal channel id`, with `mfm_exo2_boardXXX_crystalYY_ts_distribution`, `mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`, and `mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`.
+每个 EXO2 crystal 的图放在 `exo2_crystal_ts/` 目录下，严格按原始 `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())` 分组，包含 `mfm_exo2_boardXXX_crystalYY_ts_distribution`、`mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`、`mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`，以及列出每个分组条目的 `mfm_exo2_crystal_summary`。
+Per-crystal EXO2 plots are stored in `exo2_crystal_ts/`, grouped strictly by raw `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())`, with `mfm_exo2_boardXXX_crystalYY_ts_distribution`, `mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`, `mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`, and a `mfm_exo2_crystal_summary` table listing each group.
 
 ## RawTree EXO Gamma Timing Spectrum / RawTree EXO Gamma 时间谱分析
 

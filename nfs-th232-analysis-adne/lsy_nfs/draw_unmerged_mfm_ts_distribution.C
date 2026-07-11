@@ -28,8 +28,8 @@
 //     排序 Delta-TS 图会先对 TS 排序再相邻相减，因此间隔全为正值。
 //   - Read-order Delta-TS histograms keep the original file/unfolding order and may contain negative intervals.
 //     未排序 Delta-TS 图保留原始文件/展开读取顺序，因此可能包含负间隔。
-//   - Per-crystal EXO2 plots are grouped by raw NUMEXO board id and trigger/crystal channel id.
-//     每个 crystal 的 EXO2 图按原始 NUMEXO board id 和 trigger/crystal channel id 分组。
+//   - Per-crystal EXO2 plots are grouped by the raw pair (ExoGetBoardId, ExoGetTGCristalId).
+//     每个 crystal 的 EXO2 图按原始 (ExoGetBoardId, ExoGetTGCristalId) 组合分组。
 
 R__ADD_INCLUDE_PATH($MFMSYS/include)
 R__LOAD_LIBRARY($MFMSYS/lib/libMFM.so)
@@ -122,8 +122,8 @@ const char *FrameTypeName(UShort_t frameType)
   }
 }
 
-// 用 board id 和 trigger/crystal channel id 组成一个稳定 key。
-// 这里不使用 ADNE LUT，因此该编号是原始 MFM/NUMEXO 层面的 crystal 标识。
+// 用原始 NUMEXO board id 和 crystal id 组成一个稳定 key。
+// crystal id 取 ExoGetTGCristalId()，即 CristalId 字段的低 5 bit；ADNE 后续再用 LUT 映射到 clover/crystal。
 Int_t CrystalKey(Int_t boardId, Int_t channelId)
 {
   return boardId * 1000 + channelId;
@@ -363,8 +363,8 @@ void CollectFrame(MFMCommonFrame *frame,
   Int_t parsedBoardId = frame->GetBoardId();
   Int_t parsedChannelId = frame->GetChannelId();
   if (frameType == MFM_EXO2_FRAME_TYPE) {
-    // EXO2 frame 的 CristalId 字段同时包含 NUMEXO board id 和 trigger/crystal channel id。
-    // ADNE 后续会用 LUT 把它映射到 clover/crystal；这里保持原始 board-channel 分组。
+    // EXO2 CristalId 是 16 bit 复合字段：高位保存 NUMEXO board id，低 5 bit 保存 crystal/channel id。
+    // 这里严格按 (ExoGetBoardId, ExoGetTGCristalId) 分组，不使用 ADNE LUT。
     MFMExogamFrame exoFrame;
     exoFrame.SetAttributs(frame->GetPointHeader());
     parsedBoardId = exoFrame.ExoGetBoardId();
@@ -594,20 +594,47 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   hZero.Write();
 
   // 12. 每个 EXO2 crystal 的 TS 分布和相邻 TS 间隔分布。
-  // 这些图按原始 board-channel 分组，方便在不加载 ADNE LUT 的情况下定位某个 crystal 的异常计数率或时间间隔。
+  // 分组键严格是 (board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())。
   TDirectory *crystalDir = out.mkdir("exo2_crystal_ts");
   if (crystalDir) {
     crystalDir->cd();
     TH1D hCrystalCounts("mfm_exo2_crystal_frame_counts",
-                        "EXO2 crystal frame counts;Raw EXO2 crystal;Frames",
+                        "EXO2 crystal frame counts;Raw EXO2 board-crystal;Frames",
                         std::max<Int_t>(1, static_cast<Int_t>(exo2CrystalTs.size())),
                         0.5, std::max<Double_t>(1.5, static_cast<Double_t>(exo2CrystalTs.size()) + 0.5));
+
+    TTree crystalSummary("mfm_exo2_crystal_summary", "EXO2 per-crystal grouping summary");
+    Int_t summaryBoardId = -1;
+    Int_t summaryCrystalId = -1;
+    Int_t summaryRawCristalId = -1;
+    Long64_t summaryEntries = 0;
+    ULong64_t summaryFirstTs = 0;
+    ULong64_t summaryLastTs = 0;
+    crystalSummary.Branch("board_id", &summaryBoardId);
+    crystalSummary.Branch("crystal_id", &summaryCrystalId);
+    crystalSummary.Branch("raw_cristal_id", &summaryRawCristalId);
+    crystalSummary.Branch("entries", &summaryEntries);
+    crystalSummary.Branch("first_ts", &summaryFirstTs);
+    crystalSummary.Branch("last_ts", &summaryLastTs);
 
     Int_t bin = 1;
     for (const auto &kv : exo2CrystalTs) {
       const Int_t key = kv.first;
       const TString tag = CrystalTag(key);
       const TString label = CrystalLabel(key);
+      summaryBoardId = CrystalBoardFromKey(key);
+      summaryCrystalId = CrystalChannelFromKey(key);
+      summaryRawCristalId = (summaryBoardId << 5) | summaryCrystalId;
+      summaryEntries = static_cast<Long64_t>(kv.second.size());
+      summaryFirstTs = 0;
+      summaryLastTs = 0;
+      if (!kv.second.empty()) {
+        const auto mm = std::minmax_element(kv.second.begin(), kv.second.end());
+        summaryFirstTs = *mm.first;
+        summaryLastTs = *mm.second;
+      }
+      crystalSummary.Fill();
+
       hCrystalCounts.GetXaxis()->SetBinLabel(bin, label.Data());
       hCrystalCounts.SetBinContent(bin, static_cast<Double_t>(kv.second.size()));
       bin++;
@@ -638,7 +665,11 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
     }
     hCrystalCounts.SetEntries(exo2FrameTs.size());
     hCrystalCounts.Write();
+    crystalSummary.Write();
     SaveCanvas(&hCrystalCounts);
+    if (exo2CrystalTs.empty()) {
+      std::cerr << "Warning: no EXO2 board/crystal groups were filled. Check input type and EXO2 frame count." << std::endl;
+    }
     out.cd();
   }
 
