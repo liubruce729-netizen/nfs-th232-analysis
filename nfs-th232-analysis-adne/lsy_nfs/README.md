@@ -189,29 +189,41 @@ By default it only matches `nfs_run_*_r*.root`, excluding `mult3_nfs_run_*.root`
 
 ## Unmerged MFM TS Distribution / 未 merged MFM TS 分布
 
-`draw_unmerged_mfm_ts_distribution.C` 直接读取原始 MFM 文件，不经过 ADNE 的 detector 解包，也不需要先生成 RawTree。它从指定的顶层 MFM event 编号开始，绘制 top event、所有 frame、EXO2 frame 的 TS 分布和相邻 TS 差分；如果遇到 merge frame，会按 ADNE `GUser::CaptureRawFrame()` 的思路递归展开内部 frame。
-`draw_unmerged_mfm_ts_distribution.C` reads the raw MFM file directly, without ADNE detector unpacking or a prebuilt RawTree. Starting from a selected top-level MFM event index, it draws TS distributions and adjacent-TS differences for top events, all frames, and EXO2 frames. Merge frames are recursively unfolded following the same idea as ADNE `GUser::CaptureRawFrame()`.
+`draw_unmerged_mfm_ts_distribution.C` 直接读取原始 MFM 文件，不经过 ADNE 的 detector 解包，也不需要先生成 RawTree。它从原始文件开头读取指定数量的顶层 MFM event，绘制 top event、所有 frame、EXO2 frame 以及每个 EXO2 crystal 的 TS 分布和相邻 TS 差分；如果遇到 merge frame，会按 ADNE `GUser::CaptureRawFrame()` 的思路递归展开内部 frame。
+`draw_unmerged_mfm_ts_distribution.C` reads the raw MFM file directly, without ADNE detector unpacking or a prebuilt RawTree. It reads a requested number of top-level MFM events from the file start and draws TS distributions and adjacent-TS differences for top events, all frames, EXO2 frames, and each EXO2 crystal. Merge frames are recursively unfolded following the same idea as ADNE `GUser::CaptureRawFrame()`.
 
 ```bash
 cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
 source /home/user0/work/IJCLAB/NFS/NFS_env.sh
 
-root -l -b -q 'lsy_nfs/draw_unmerged_mfm_ts_distribution.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",0,5000,10)'
+# Recommended: input MFM path, number of top-level events, output ROOT path.
+# 推荐：只输入 MFM 路径、读取的顶层 event 数、输出 ROOT 路径。
+root -l -b -q 'lsy_nfs/draw_unmerged_mfm_ts_distribution.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",5000,"out/mfm_ts_diff.root")'
 
-# Start from top event 1000, analyse 2000 top events, write an explicit output.
-# 从第 1000 个顶层 event 开始，分析 2000 个顶层 event，并指定输出文件。
+# Advanced: start from top event 1000, analyse 2000 top events, use 10 ns histogram bins.
+# 高级用法：从第 1000 个顶层 event 开始，分析 2000 个顶层 event，直方图 bin 宽为 10 ns。
 root -l -b -q 'lsy_nfs/draw_unmerged_mfm_ts_distribution.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",1000,2000,10,"out/unmerged_mfm_ts_start1000.root")'
 ```
 
-参数顺序：
-Arguments:
+推荐参数顺序：
+Recommended arguments:
+
+```text
+inputMfmFile, maxEvents, outputFile
+```
+
+高级参数顺序：
+Advanced arguments:
 
 ```text
 inputMfmFile, startEvent, maxEvents, binWidthNs, outputFile, unfoldMerge, tsTickNs
 ```
 
-默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的按 TS 排序 `delta_ts` 图、按读取/展开顺序填充的 `*_delta_ts_read_order` 图、`mfm_frame_type_counts`，以及 `mfm_frame_table`。sorted 图会先排序 TS，因此间隔全为正；read-order 图不排序，用来检查原始文件/merge 展开顺序，可能出现负值。
-The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, TS-sorted `delta_ts` histograms, read/unfold-order `*_delta_ts_read_order` histograms, `mfm_frame_type_counts`, and `mfm_frame_table`. Sorted histograms sort TS first, so intervals are positive; read-order histograms keep the original file/unfolding order and may contain negative values.
+默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。推荐三参数入口内部固定使用 `10 ns/bin`，这个值只决定 ROOT 直方图分箱，不参与 TS diff 的计算。TS diff 的每个值都由读到的相邻 TS 直接相减得到。
+The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The recommended three-argument entry point internally uses `10 ns/bin`; this value controls ROOT histogram binning only and is not used to compute TS differences. Each TS-diff value is computed directly from adjacent timestamps.
+
+输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的按 TS 排序 `delta_ts` 图、按读取/展开顺序填充的 `*_delta_ts_read_order` 图、`mfm_frame_type_counts`，以及 `mfm_frame_table`。sorted 图会先排序 TS，因此间隔全为正；read-order 图不排序，用来检查原始文件/merge 展开顺序，可能出现负值。
+The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, TS-sorted `delta_ts` histograms, read/unfold-order `*_delta_ts_read_order` histograms, `mfm_frame_type_counts`, and `mfm_frame_table`. Sorted histograms sort TS first, so intervals are positive; read-order histograms keep the original file/unfolding order and may contain negative values.
 
 每个 EXO2 crystal 的图放在 `exo2_crystal_ts/` 目录下，严格按原始 `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())` 分组，包含 `mfm_exo2_boardXXX_crystalYY_ts_distribution`、`mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`、`mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`，以及列出每个分组条目的 `mfm_exo2_crystal_summary`。
 Per-crystal EXO2 plots are stored in `exo2_crystal_ts/`, grouped strictly by raw `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())`, with `mfm_exo2_boardXXX_crystalYY_ts_distribution`, `mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`, `mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`, and a `mfm_exo2_crystal_summary` table listing each group.

@@ -4,15 +4,18 @@
 // Usage / 用法:
 //   cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
 //   source /home/user0/work/IJCLAB/NFS/NFS_env.sh
-//   root -l -b -q 'lsy_nfs/draw_unmerged_mfm_ts_distribution.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",0,5000,10)'
+//   root -l -b -q 'lsy_nfs/draw_unmerged_mfm_ts_distribution.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",5000,"out/mfm_ts_diff.root")'
 //
-// Arguments / 参数:
-//   inputMfmFile, startEvent, maxEvents, binWidthNs, outputFile, unfoldMerge, tsTickNs
+// Simple interface / 简化接口:
+//   inputMfmFile, maxEvents, outputFile
 //   inputMfmFile : raw/unmerged MFM file / 原始未 merged MFM 文件
+//   maxEvents    : number of top-level events to analyse; <0 means full file / 读取顶层 event 数；<0 表示全文件
+//   outputFile   : ROOT output path / 输出 ROOT 文件名
+//
+// Advanced interface / 高级接口:
+//   inputMfmFile, startEvent, maxEvents, binWidthNs, outputFile, unfoldMerge, tsTickNs
 //   startEvent   : first top-level MFM frame/event to analyse / 起始顶层 MFM event 编号
-//   maxEvents    : number of top-level events to analyse; <0 means full file / 读取事件数；<0 表示全文件
-//   binWidthNs   : requested time-axis bin width / 时间轴 bin 宽
-//   outputFile   : ROOT output path; empty gives <input>_unmerged_mfm_ts.root / 输出 ROOT 文件名
+//   binWidthNs   : histogram bin width only; it does not define TS differences / 仅为直方图 bin 宽，不参与 TS 差计算
 //   unfoldMerge  : recursively unfold MFM merge frames / 是否递归展开 merge frame
 //   tsTickNs     : MFM TS tick length in ns; ADNE/NFS convention is 10 ns / TS tick 长度，ADNE/NFS 中为 10 ns
 //
@@ -417,7 +420,7 @@ void CollectFrame(MFMCommonFrame *frame,
 
 } // namespace
 
-// 主入口函数。
+// 完整入口函数，保留历史调试参数。
 // 注意：输入必须是原始 MFM/dat 文件，不是 ADNE 生成的 ROOT 文件。
 void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                        Long64_t startEvent = 0,
@@ -722,4 +725,19 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   std::cout << "EXO2 crystal groups: " << exo2CrystalTs.size() << std::endl;
   std::cout << "Saved frame-table rows: " << frameRows.size() << std::endl;
   std::cout << "Output: " << outName << std::endl;
+}
+
+// 推荐入口：只输入原始 MFM 文件、读取顶层 event 数和输出 ROOT 路径。
+// TS diff 数值完全由读到的相邻 TS 相减得到；这里固定 10 ns/bin 和 10 ns/tick，避免把 bin 宽误当成物理 cut。
+void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
+                                        Long64_t maxEvents,
+                                        const char *outputFile)
+{
+  draw_unmerged_mfm_ts_distribution(inputMfmFile,
+                                    0,           // startEvent: 从文件开头读取 / read from file start
+                                    maxEvents,
+                                    10.0,        // histogram bin width only / 仅直方图 bin 宽
+                                    outputFile,
+                                    true,        // unfold merge frames / 展开 merge frame
+                                    10.0);       // MFM TS tick in ns / TS tick 单位 ns
 }
