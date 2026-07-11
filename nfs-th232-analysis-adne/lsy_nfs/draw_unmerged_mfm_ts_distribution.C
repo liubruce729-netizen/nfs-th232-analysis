@@ -54,26 +54,33 @@ R__LOAD_LIBRARY($MFMSYS/lib/libMFM.so)
 
 namespace {
 
+// 为了避免长时间运行的原始数据产生过多 bin，时间轴直方图最多保留 1e6 个 bin。
+// 如果时间跨度太大，脚本会自动放宽实际 bin 宽，而不是创建超大直方图。
 constexpr Long64_t kMaxHistogramBins = 1000000;
+
+// frame table 主要用于抽查前面一段数据结构，不建议把超大文件所有 frame 都写入表中。
 constexpr Long64_t kMaxSavedFrameRows = 500000;
 
+// 保存到 mfm_frame_table 的单个 frame 信息。
+// 这里的 frame 包括顶层 frame，也包括 merge frame 内部递归展开得到的子 frame。
 struct FrameRow {
-  Long64_t topEventIndex = -1;
-  Long64_t selectedEventIndex = -1;
-  Int_t depth = 0;
-  Int_t indexInParent = 0;
-  UShort_t frameType = 0;
-  UShort_t dataSource = 0;
-  UInt_t eventNumber = 0;
-  ULong64_t timeStamp = 0;
-  Double_t relTimeNs = 0.0;
-  Int_t frameSize = 0;
-  Int_t headerSize = 0;
-  Int_t nbItems = -1;
-  Int_t boardId = -1;
-  Int_t channelId = -1;
+  Long64_t topEventIndex = -1;      // 原始文件中的顶层 MFM event/frame 序号，从 0 开始。
+  Long64_t selectedEventIndex = -1; // 本次分析选中的第几个顶层 event，从 startEvent 后重新编号。
+  Int_t depth = 0;                  // frame 嵌套深度：0 是顶层 frame，1 是 merge 内部第一层子 frame。
+  Int_t indexInParent = 0;          // 当前 frame 在父 merge frame 中的序号。
+  UShort_t frameType = 0;           // MFM frame type，例如 0x10 是 EXO2，0xff02 是 merge TS。
+  UShort_t dataSource = 0;          // MFM data source 字段。
+  UInt_t eventNumber = 0;           // frame 里保存的 event number；TS merge frame 可能不使用该量。
+  ULong64_t timeStamp = 0;          // MFM 原始绝对 TS，单位是 tick。
+  Double_t relTimeNs = 0.0;         // 相对第一个非零 TS 的时间，单位 ns。
+  Int_t frameSize = 0;              // 当前 frame 字节数，用来检查异常/损坏 frame。
+  Int_t headerSize = 0;             // 当前 frame header 字节数。
+  Int_t nbItems = -1;               // 如果是 merge frame，这里记录其内部 item/frame 数；否则为 -1。
+  Int_t boardId = -1;               // MFMlib 可解析出的 board id；无法解析时为 -1。
+  Int_t channelId = -1;             // MFMlib 可解析出的 channel id；无法解析时为 -1。
 };
 
+// 根据输入 MFM 文件名生成默认输出 ROOT 文件名。
 TString DefaultOutputName(const char *inputMfmFile)
 {
   TString out(inputMfmFile ? inputMfmFile : "mfm");
@@ -83,11 +90,14 @@ TString DefaultOutputName(const char *inputMfmFile)
   return out;
 }
 
+// 判断一个 frame 是否是 merge frame。
+// merge frame 本身是一个容器，里面还包含多个真实探测器 frame，需要递归展开。
 bool IsMergeFrame(UShort_t frameType)
 {
   return frameType == MFM_MERGE_EN_FRAME_TYPE || frameType == MFM_MERGE_TS_FRAME_TYPE;
 }
 
+// 给常见 MFM frame type 一个可读名字，用于 frame type 计数图的轴标签。
 const char *FrameTypeName(UShort_t frameType)
 {
   switch (frameType) {
@@ -105,6 +115,8 @@ const char *FrameTypeName(UShort_t frameType)
   }
 }
 
+// 选择时间零点：优先使用顶层 event 的第一个非零 TS；如果顶层 TS 都为 0，
+// 再从所有展开后的 frame TS 中寻找第一个非零 TS。
 ULong64_t FirstNonZeroTs(const std::vector<ULong64_t> &a, const std::vector<ULong64_t> &b)
 {
   for (ULong64_t ts : a) {
@@ -116,6 +128,8 @@ ULong64_t FirstNonZeroTs(const std::vector<ULong64_t> &a, const std::vector<ULon
   return 0;
 }
 
+// 把绝对 TS tick 转为相对时间 ns。
+// 只保留非零且不早于 baseTs 的 TS；损坏/无效 TS 不进入时间谱。
 std::vector<Double_t> RelativeTimesNs(const std::vector<ULong64_t> &ticks,
                                       ULong64_t baseTs,
                                       Double_t tsTickNs)
@@ -129,6 +143,8 @@ std::vector<Double_t> RelativeTimesNs(const std::vector<ULong64_t> &ticks,
   return out;
 }
 
+// 根据时间数组创建一维时间分布图。
+// 如果时间跨度很大，为避免百万以上的 bin 导致 ROOT 文件巨大，会自动限制最大 bin 数。
 TH1D *MakeTimeHistogram(const std::vector<Double_t> &timesNs,
                         const char *name,
                         const char *title,
@@ -154,6 +170,8 @@ TH1D *MakeTimeHistogram(const std::vector<Double_t> &timesNs,
   return hist;
 }
 
+// 按“时间大小排序”后计算相邻 TS 差分。
+// 这个图用于观察整体时间间隔分布，但它不是 ADNE 在线谱的填充方式。
 TH1D *MakeDeltaHistogram(const std::vector<Double_t> &timesNs,
                          const char *name,
                          const char *title,
@@ -176,6 +194,8 @@ TH1D *MakeDeltaHistogram(const std::vector<Double_t> &timesNs,
   return MakeTimeHistogram(deltas, name, title, requestedBinWidthNs);
 }
 
+// 为可能带负值的差分量创建直方图。
+// 按读取顺序做 TS 差时，如果原始文件不是严格时间排序，差分可能为负，因此不能只从 0 开始画。
 TH1D *MakeSignedValueHistogram(const std::vector<Double_t> &values,
                               const char *name,
                               const char *title,
@@ -221,6 +241,9 @@ TH1D *MakeSignedValueHistogram(const std::vector<Double_t> &values,
   return hist;
 }
 
+// 按“读取顺序”计算相邻 frame 的 TS 差分。
+// 这对应 ADNE 里 TimeStampDiffTExogam2 的逻辑：当前 EXO2 frame TS - 上一个 EXO2 frame TS。
+// 与 MakeDeltaHistogram 不同，这里不排序，保留文件/解包顺序。
 TH1D *MakeReadOrderDeltaHistogram(const std::vector<ULong64_t> &ticks,
                                   const char *name,
                                   const char *title,
@@ -239,6 +262,7 @@ TH1D *MakeReadOrderDeltaHistogram(const std::vector<ULong64_t> &ticks,
   return MakeSignedValueHistogram(deltas, name, title, requestedBinWidthNs);
 }
 
+// 给每张关键直方图额外保存一个 canvas，方便直接打开 ROOT 文件浏览。
 void SaveCanvas(TH1 *hist, const char *drawOpt = "hist")
 {
   if (!hist) return;
@@ -247,6 +271,9 @@ void SaveCanvas(TH1 *hist, const char *drawOpt = "hist")
   canvas.Write();
 }
 
+// 递归收集一个 MFM frame 的信息。
+// 若当前 frame 是 merge frame，并且 unfoldMerge=true，则继续读取其内部子 frame。
+// 这样可以同时得到顶层 frame 时间、所有子 frame 时间，以及 EXO2 frame 时间。
 void CollectFrame(MFMCommonFrame *frame,
                   Long64_t topEventIndex,
                   Long64_t selectedEventIndex,
@@ -260,6 +287,8 @@ void CollectFrame(MFMCommonFrame *frame,
                   std::map<UShort_t, Long64_t> &zeroTsCounts)
 {
   if (!frame) return;
+
+  // SetAttributs 会让 MFMlib 从当前原始字节中解析 frame type、size、TS、event number 等字段。
   frame->SetAttributs();
 
   const UShort_t frameType = frame->GetFrameType();
@@ -296,6 +325,7 @@ void CollectFrame(MFMCommonFrame *frame,
 
   if (!unfoldMerge || !IsMergeFrame(frameType)) return;
 
+  // merge frame 内部是多个连续存放的子 frame。ResetReadInMem 后，ReadInFrame 会逐个取出。
   MFMMergeFrame mergeFrame;
   mergeFrame.SetAttributs(frame->GetPointHeader());
   mergeFrame.ResetReadInMem();
@@ -309,6 +339,8 @@ void CollectFrame(MFMCommonFrame *frame,
 
 } // namespace
 
+// 主入口函数。
+// 注意：输入必须是原始 MFM/dat 文件，不是 ADNE 生成的 ROOT 文件。
 void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                        Long64_t startEvent = 0,
                                        Long64_t maxEvents = 100000,
@@ -317,6 +349,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                        bool unfoldMerge = true,
                                        Double_t tsTickNs = 10.0)
 {
+  // 1. 参数检查。
   if (!inputMfmFile || TString(inputMfmFile).IsNull()) {
     std::cerr << "Input MFM file is empty / 输入 MFM 文件名为空" << std::endl;
     return;
@@ -330,12 +363,17 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
     return;
   }
 
+  // 2. 以只读方式打开原始 MFM 文件。脚本不会修改输入文件。
   const int fd = open(inputMfmFile, O_RDONLY);
   if (fd < 0) {
     std::cerr << "Cannot open MFM file / 无法打开 MFM 文件: " << inputMfmFile << std::endl;
     return;
   }
 
+  // 3. 保存不同层级的 TS。
+  // topEventTs: 顶层 frame/event 的 TS。
+  // allFrameTs: 顶层 frame 加上递归展开的所有子 frame 的 TS。
+  // exo2FrameTs: 只保留 EXO2 frame 的 TS，用来对照 ADNE 的 Exogam 时间谱。
   std::vector<ULong64_t> topEventTs;
   std::vector<ULong64_t> allFrameTs;
   std::vector<ULong64_t> exo2FrameTs;
@@ -348,11 +386,14 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   Long64_t selectedEvents = 0;
   Long64_t bytesRead = 0;
 
+  // 4. 顺序读取顶层 MFM frame。
+  // ReadInFile 每次从文件当前位置读取一个完整 MFM frame，并由 MFMlib 解析 header。
   while (true) {
     Int_t readSize = topFrame.ReadInFile(const_cast<int *>(&fd));
     if (readSize <= 0) break;
     bytesRead += readSize;
 
+    // 跳过 startEvent 之前的顶层 event，从指定位置开始统计。
     if (topEventIndex >= startEvent) {
       if (maxEvents >= 0 && selectedEvents >= maxEvents) break;
       topFrame.SetAttributs();
@@ -366,6 +407,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   }
   close(fd);
 
+  // 5. 选取第一个非零 TS 作为时间零点，把绝对 TS 转为相对 ns。
   const ULong64_t baseTs = FirstNonZeroTs(topEventTs, allFrameTs);
   std::vector<Double_t> topTimesNs = RelativeTimesNs(topEventTs, baseTs, tsTickNs);
   std::vector<Double_t> allFrameTimesNs = RelativeTimesNs(allFrameTs, baseTs, tsTickNs);
@@ -379,6 +421,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
     }
   }
 
+  // 6. 创建输出 ROOT 文件。
   TString outName = (outputFile && TString(outputFile).Length() > 0) ? TString(outputFile) : DefaultOutputName(inputMfmFile);
   TFile out(outName, "RECREATE");
   if (!out.IsOpen()) {
@@ -386,6 +429,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
     return;
   }
 
+  // 7. 写入配置记录，方便之后确认该 ROOT 文件由哪个输入和参数生成。
   TNamed config("unmerged_mfm_ts_config",
                 TString::Format("input=%s; start_event=%lld; max_events=%lld; selected_events=%lld; scanned_top_events=%lld; bytes_read=%lld; unfold_merge=%d; ts_tick_ns=%.12g; bin_width_ns=%.12g; base_ts=%llu; saved_frame_rows=%lld",
                                 inputMfmFile, startEvent, maxEvents, selectedEvents, topEventIndex,
@@ -394,6 +438,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                 static_cast<Long64_t>(frameRows.size())).Data());
   config.Write();
 
+  // 8. 时间分布图：横轴是相对第一个非零 TS 的时间。
   TH1D *hTop = MakeTimeHistogram(topTimesNs,
                                  "mfm_top_event_ts_distribution",
                                  "Top-level MFM event TS distribution;Time from first selected TS (ns);Top events / bin",
@@ -406,6 +451,8 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                  "mfm_exo2_frame_ts_distribution",
                                  "EXO2 frame TS distribution;Time from first selected TS (ns);EXO2 frames / bin",
                                  binWidthNs);
+  // 9. 按 TS 排序后的相邻间隔分布。
+  // 这些图回答“所有时间点之间的间隔分布是什么”，但不保留读取顺序。
   TH1D *hTopDt = MakeDeltaHistogram(topTimesNs,
                                     "mfm_top_event_delta_ts",
                                     "Delta TS between consecutive top-level events;#DeltaT (ns);Pairs / bin",
@@ -418,6 +465,8 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                     "mfm_exo2_frame_delta_ts",
                                     "Delta TS between consecutive EXO2 frames;#DeltaT sorted by TS (ns);Pairs / bin",
                                     binWidthNs);
+  // 10. 按读取顺序的相邻 frame 间隔分布。
+  // 这更接近 ADNE 在线谱 TimeStampDiffTExogam2：不排序，直接 current TS - previous TS。
   TH1D *hAllReadOrderDt = MakeReadOrderDeltaHistogram(
       allFrameTs,
       "mfm_all_frame_delta_ts_read_order",
@@ -438,6 +487,8 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   hAllReadOrderDt->Write();
   hExoReadOrderDt->Write();
 
+  // 11. frame type 计数和 TS=0 的 frame type 计数。
+  // 这可以快速检查文件里是否混有非 EXO2 frame、hello frame、merge frame 或异常 zero-TS frame。
   TH1I hType("mfm_frame_type_counts", "MFM frame type counts;Frame type;Frames", 65536, 0, 65536);
   TH1I hZero("mfm_zero_ts_frame_type_counts", "MFM zero-TS frame type counts;Frame type;Frames with TS=0", 65536, 0, 65536);
   for (const auto &kv : typeCounts) {
@@ -457,6 +508,8 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   hType.Write();
   hZero.Write();
 
+  // 12. 写出 frame table。
+  // 它不是后续大规模分析的主数据，而是用来抽查原始 MFM 结构和定位坏 frame。
   TTree frameTable("mfm_frame_table", "Unmerged MFM frame table");
   FrameRow row;
   frameTable.Branch("top_event_index", &row.topEventIndex);
@@ -479,6 +532,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   }
   frameTable.Write();
 
+  // 13. 保存 canvas，方便用 TBrowser 或 ROOT GUI 直接查看。
   SaveCanvas(hTop);
   SaveCanvas(hAll);
   SaveCanvas(hExo);
@@ -490,6 +544,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
 
   out.Close();
 
+  // 14. 终端打印简要统计，便于批处理日志中快速检查。
   std::cout << "Input: " << inputMfmFile << std::endl;
   std::cout << "Start top event: " << startEvent << std::endl;
   std::cout << "Selected top events: " << selectedEvents << std::endl;
