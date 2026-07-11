@@ -8,6 +8,7 @@ nfs_exo_ana:
 
 analysis:
   filename: "ListRun.txt"
+  max_events: 0  # EN: 0 means full file; positive value limits events per input file. CN: 0表示完整文件；正数限制每个输入文件处理的event数
   spectra_port: 9095
   tree_exogam2: false 
   tree_trigger: false 

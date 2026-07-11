@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <yaml-cpp/yaml.h> 
 #include <stdlib.h>
+#include <limits>
 
 using namespace std;
 
@@ -99,6 +100,22 @@ int main(int argc, char* argv[]){
 	
 	YAML::Node config = YAML::LoadFile("Yaml_config_files/config.yaml");
 	std::string inputFile  = config["analysis"]["filename"].as<std::string>();
+	UInt_t maxEventsToProcess = 0; // 0 means full file / 0 表示处理完整文件
+	if(config["analysis"]["max_events"]) {
+		Long64_t configuredMaxEvents = config["analysis"]["max_events"].as<Long64_t>();
+		if(configuredMaxEvents > 0) {
+			if(static_cast<ULong64_t>(configuredMaxEvents) > std::numeric_limits<UInt_t>::max()) {
+				maxEventsToProcess = std::numeric_limits<UInt_t>::max();
+				cerr << "analysis.max_events is larger than UInt_t, clamped to " << maxEventsToProcess << endl;
+			}
+			else {
+				maxEventsToProcess = static_cast<UInt_t>(configuredMaxEvents);
+			}
+		}
+	}
+	if(maxEventsToProcess > 0) {
+		cout << "ADNE max events per input file: " << maxEventsToProcess << endl;
+	}
 	
 	
 	
@@ -267,7 +284,8 @@ int main(int argc, char* argv[]){
  		printf("\033[32m **********  Run #%d sub %d treatment starts **********   \033[m \n",RunNumb,RunNumbSub);
 		 //Start Time
 		std::time_t start = std::time(nullptr);	
-		aa->DoRun();
+		if(maxEventsToProcess > 0) aa->DoRun(maxEventsToProcess);
+		else aa->DoRun();
 		serv->StopServer();
 		file->Close();
 		aa->EndUser(); 
