@@ -4,15 +4,24 @@
 // Usage / 用法:
 //   cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
 //   source /home/user0/work/IJCLAB/NFS/NFS_env.sh
+//   // Full file scan, output TS event axis and density /10 ns.
+//   // 全文件扫描，输出 TS-事例轴和 /10 ns 事件密度。
 //   root -l -b -q 'lsy_nfs/draw_raw_timestamp_axis.C("out/nfs_run_23_r0.root")'
-//   root -l -b -q 'lsy_nfs/draw_raw_timestamp_axis.C("out/nfs_run_23_r0.root","RawTree",50000,10,"out/raw_ts.root")'
+//
+//   // Fill a selected TS window [1.0e6, 1.05e6] ns with 10 ns requested bins.
+//   // 填充指定 TS 时间区间 [1.0e6, 1.05e6] ns，请求 bin 宽 10 ns。
+//   root -l -b -q 'lsy_nfs/draw_raw_timestamp_axis.C("out/nfs_run_23_r0.root","RawTree",50000,10,"out/raw_ts_window.root",false,1000000)'
+//
+//   // Compatibility mode: read the first 5000 RawTree entries.
+//   // 兼容模式：读取前 5000 个 RawTree entry。
 //   root -l -b -q 'lsy_nfs/draw_raw_timestamp_axis.C("out/nfs_run_23_r0.root","RawTree",5000,10,"out/raw_ts_by_event.root",true)'
 //
 // Arguments / 参数:
-//   inputFile, treeName, timeWindowOrMaxEvents, binWidthNs, outputFile, limitByEventCount
+//   inputFile, treeName, timeWindowOrMaxEvents, binWidthNs, outputFile, limitByEventCount, timeStartNs
 //   第三个参数保持原接口位置不变：
-//     limitByEventCount=false 时表示从第一个非零 TS 开始读取的时间窗口(ns)，这是默认模式。
-//     limitByEventCount=true  时表示最多读取的 RawTree event 数，保留旧行为。
+//     limitByEventCount=false 且 timeWindowOrMaxEvents<=0 时扫描完整 RawTree，这是默认模式。
+//     limitByEventCount=false 且 timeWindowOrMaxEvents>0  时扫描 [timeStartNs, timeStartNs+timeWindowOrMaxEvents] ns。
+//     limitByEventCount=true 时表示最多读取的 RawTree event 数，保留旧行为。
 //
 // Notes / 说明:
 //   - ADNE stores MFM timestamps as absolute TS ticks.
@@ -20,10 +29,10 @@
 //   - In this analysis chain, 1 TS tick = 10 ns, inferred from ADNE rate calculation:
 //       seconds = (TS - TStart) / 1e8
 //     在本分析链中，1 个 TS tick = 10 ns；ADNE 计算 rate 时使用 (TS - TStart) / 1e8 得到秒。
-//   - By default, the macro subtracts the first non-zero top timestamp and draws a fixed
-//     TS time window, which is the useful view for beam/bunch structure.
-//     默认模式下，本脚本减去第一个非零顶层 event TS，并绘制固定 TS 时间窗口；
-//     这比固定 event 数更适合看束流/束团结构。
+//   - By default, the macro subtracts the first non-zero top timestamp and scans the
+//     full RawTree, giving a TS-event cumulative axis and event density in counts / 10 ns.
+//     默认模式下，本脚本减去第一个非零顶层 event TS，扫描完整 RawTree，输出
+//     TS-事例累计轴，以及单位为 counts / 10 ns 的事件密度。
 //   - RawTree one entry = one top-level MFM event; frame vectors contain the top frame and
 //     all nested frames captured from that event.
 //     RawTree 的一个 entry 对应一个顶层 MFM event；frame 向量包含顶层 frame 和其中的子 frame。
@@ -122,20 +131,40 @@ TH1D *BuildDeltaHistogram(const std::vector<double> &times,
   return hist;
 }
 
+TH1D *BuildDensityPer10nsHistogram(TH1D *counts,
+                                   const char *name,
+                                   const char *title,
+                                   double actualBinWidthNs)
+{
+  // EN: Keep the y-axis in counts / 10 ns even when long files require wider bins.
+  // CN: 即使长文件必须使用更宽 bin，也把纵轴归一到 counts / 10 ns。
+  TH1D *density = counts ? dynamic_cast<TH1D *>(counts->Clone(name)) : nullptr;
+  if (!density) return nullptr;
+  density->SetTitle(title);
+  density->SetDirectory(nullptr);
+  if (actualBinWidthNs > 0.0) density->Scale(10.0 / actualBinWidthNs);
+  return density;
+}
+
 } // namespace
 
 void draw_raw_timestamp_axis(const char *inputFile,
                              const char *treeName = "RawTree",
-                             double timeWindowOrMaxEvents = 50000.0,
+                             double timeWindowOrMaxEvents = 0.0,
                              double binWidthNs = 10.0,
                              const char *outputFile = "",
-                             bool limitByEventCount = false)
+                             bool limitByEventCount = false,
+                             double timeStartNs = 0.0)
 {
   // EN: Validate user parameters before opening large files.
   // CN: 先检查参数，避免对大文件做无效读取。
-  if (timeWindowOrMaxEvents <= 0.0) {
-    std::cerr << "timeWindowOrMaxEvents must be positive / timeWindowOrMaxEvents 必须大于 0"
+  if (limitByEventCount && timeWindowOrMaxEvents <= 0.0) {
+    std::cerr << "max event count must be positive in entry-count mode / 固定 event 数模式下 event 数必须大于 0"
               << std::endl;
+    return;
+  }
+  if (!limitByEventCount && timeStartNs < 0.0) {
+    std::cerr << "timeStartNs must be non-negative / timeStartNs 必须大于等于 0" << std::endl;
     return;
   }
   if (binWidthNs <= 0.0) {
@@ -143,7 +172,12 @@ void draw_raw_timestamp_axis(const char *inputFile,
     return;
   }
 
-  const double requestedTimeWindowNs = timeWindowOrMaxEvents;
+  const bool scanFullTimeRange = !limitByEventCount && timeWindowOrMaxEvents <= 0.0;
+  const double requestedTimeWindowNs = scanFullTimeRange ? 0.0 : timeWindowOrMaxEvents;
+  const double requestedTimeStartNs = limitByEventCount ? 0.0 : timeStartNs;
+  const double requestedTimeStopNs = scanFullTimeRange
+                                       ? std::numeric_limits<double>::infinity()
+                                       : requestedTimeStartNs + requestedTimeWindowNs;
   const Long64_t maxEntriesToRead = static_cast<Long64_t>(std::llround(timeWindowOrMaxEvents));
 
   TFile *fin = TFile::Open(inputFile, "READ");
@@ -171,6 +205,10 @@ void draw_raw_timestamp_axis(const char *inputFile,
   Int_t rawTopNbItems = -1;
   std::vector<ULong64_t> *rawFrameTimestamp = nullptr;
   std::vector<Int_t> *rawFrameType = nullptr;
+  std::vector<Int_t> *rawExoInnerM6 = nullptr;
+  std::vector<Int_t> *rawExoInnerM20 = nullptr;
+  std::vector<Int_t> *rawExoBGO = nullptr;
+  std::vector<Int_t> *rawExoCSI = nullptr;
 
   tree->SetBranchAddress("raw_top_timestamp", &rawTopTimestamp);
   if (HasBranch(tree, "raw_event_index")) {
@@ -185,6 +223,10 @@ void draw_raw_timestamp_axis(const char *inputFile,
 
   const bool hasFrameTimestamp = HasBranch(tree, "raw_frame_timestamp");
   const bool hasFrameType = HasBranch(tree, "raw_frame_type");
+  const bool hasRawExoInnerM6 = HasBranch(tree, "raw_exo_inner_m6");
+  const bool hasRawExoInnerM20 = HasBranch(tree, "raw_exo_inner_m20");
+  const bool hasRawExoBGO = HasBranch(tree, "raw_exo_bgo");
+  const bool hasRawExoCSI = HasBranch(tree, "raw_exo_csi");
 
   if (hasFrameTimestamp) {
     tree->SetBranchAddress("raw_frame_timestamp", &rawFrameTimestamp);
@@ -198,6 +240,10 @@ void draw_raw_timestamp_axis(const char *inputFile,
     std::cerr << "Warning: raw_frame_type not found; EXO2-only histogram will be empty."
               << std::endl;
   }
+  if (hasRawExoInnerM6) tree->SetBranchAddress("raw_exo_inner_m6", &rawExoInnerM6);
+  if (hasRawExoInnerM20) tree->SetBranchAddress("raw_exo_inner_m20", &rawExoInnerM20);
+  if (hasRawExoBGO) tree->SetBranchAddress("raw_exo_bgo", &rawExoBGO);
+  if (hasRawExoCSI) tree->SetBranchAddress("raw_exo_csi", &rawExoCSI);
 
   // EN: First pass: keep relative times either inside a fixed TS window or for N entries.
   // CN: 第一遍：按固定 TS 时间窗口或固定 entry 数保存相对时间。
@@ -211,6 +257,10 @@ void draw_raw_timestamp_axis(const char *inputFile,
   Long64_t eventsRead = 0;
   Long64_t eventsWithNonZeroTS = 0;
   bool stoppedByTimeWindow = false;
+  Long64_t selectedExo2Frames = 0;
+  Long64_t selectedExo2FramesWithCoreEnergy = 0;
+  Long64_t selectedExo2FramesWithCoreEnergyGt10 = 0;
+  Long64_t selectedExo2FramesWithBgoOrCsiOnly = 0;
   double maxTimeNs = 0.0;
   ULong64_t minPositiveEventDeltaTicks = std::numeric_limits<ULong64_t>::max();
   ULong64_t maxEventDeltaTicks = 0;
@@ -258,12 +308,14 @@ void draw_raw_timestamp_axis(const char *inputFile,
     if (firstTopTS == 0) firstTopTS = rawTopTimestamp;
 
     const double topTimeNs = static_cast<double>(rawTopTimestamp - firstTopTS) * kTsTickToNs;
-    if (!limitByEventCount && topTimeNs > requestedTimeWindowNs) {
+    if (!limitByEventCount && !scanFullTimeRange && topTimeNs > requestedTimeStopNs) {
       stoppedByTimeWindow = true;
       break;
     }
 
-    if (topTimeNs >= 0.0) {
+    const bool topInSelectedRange = limitByEventCount || scanFullTimeRange ||
+                                    (topTimeNs >= requestedTimeStartNs && topTimeNs <= requestedTimeStopNs);
+    if (topTimeNs >= 0.0 && topInSelectedRange) {
       eventTimesNs.push_back(topTimeNs);
       ++eventsWithNonZeroTS;
       if (topTimeNs > maxTimeNs) maxTimeNs = topTimeNs;
@@ -316,13 +368,30 @@ void draw_raw_timestamp_axis(const char *inputFile,
       if (frameTS < firstTopTS) continue;
 
       const double frameTimeNs = static_cast<double>(frameTS - firstTopTS) * kTsTickToNs;
-      if (!limitByEventCount && frameTimeNs > requestedTimeWindowNs) continue;
+      const bool frameInSelectedRange = limitByEventCount || scanFullTimeRange ||
+                                        (frameTimeNs >= requestedTimeStartNs && frameTimeNs <= requestedTimeStopNs);
+      if (!frameInSelectedRange) continue;
 
       frameAllTimesNs.push_back(frameTimeNs);
       if (frameTimeNs > maxTimeNs) maxTimeNs = frameTimeNs;
 
       if (rawFrameType && i < rawFrameType->size() && rawFrameType->at(i) == kMfmExo2FrameType) {
         frameExo2TimesNs.push_back(frameTimeNs);
+        ++selectedExo2Frames;
+
+        const bool corePositive =
+            (rawExoInnerM6 && i < rawExoInnerM6->size() && rawExoInnerM6->at(i) > 0) ||
+            (rawExoInnerM20 && i < rawExoInnerM20->size() && rawExoInnerM20->at(i) > 0);
+        const bool coreGt10 =
+            (rawExoInnerM6 && i < rawExoInnerM6->size() && rawExoInnerM6->at(i) > 10) ||
+            (rawExoInnerM20 && i < rawExoInnerM20->size() && rawExoInnerM20->at(i) > 10);
+        const bool bgoOrCsiPositive =
+            (rawExoBGO && i < rawExoBGO->size() && rawExoBGO->at(i) > 0) ||
+            (rawExoCSI && i < rawExoCSI->size() && rawExoCSI->at(i) > 0);
+
+        if (corePositive) ++selectedExo2FramesWithCoreEnergy;
+        if (coreGt10) ++selectedExo2FramesWithCoreEnergyGt10;
+        if (!corePositive && bgoOrCsiPositive) ++selectedExo2FramesWithBgoOrCsiOnly;
       }
     }
   }
@@ -331,46 +400,68 @@ void draw_raw_timestamp_axis(const char *inputFile,
   // CN: 根据选中 event 的实际时间跨度自动建立时间轴。
   // EN: ROOT histograms use Int_t bin counts; cap huge ns-bin requests to avoid overflow.
   // CN: ROOT 直方图 bin 数是 Int_t；对过大的 ns-bin 请求做上限保护，避免溢出成 0-10 ns。
-  const double requestedAxisHighNs = limitByEventCount ? maxTimeNs : requestedTimeWindowNs;
-  const double requestedTimeBinsDouble = std::floor(requestedAxisHighNs / binWidthNs) + 1.0;
+  const double axisLowNs = (limitByEventCount || scanFullTimeRange) ? 0.0 : requestedTimeStartNs;
+  double axisHighNs = (limitByEventCount || scanFullTimeRange) ? maxTimeNs : requestedTimeStopNs;
+  if (axisHighNs <= axisLowNs) axisHighNs = axisLowNs;
+  // EN: ROOT histogram upper edges are exclusive; extend by one requested bin to keep the last TS.
+  // CN: ROOT 直方图上边界不包含；上界扩一个请求 bin，避免最后一个 TS 掉到 overflow。
+  const double axisHighForHistNs = axisHighNs + binWidthNs;
+  const double requestedAxisSpanNs = axisHighForHistNs - axisLowNs;
+  const double requestedTimeBinsDouble = std::ceil(requestedAxisSpanNs / binWidthNs);
   Int_t nbins = 1;
   double actualTimeBinWidthNs = binWidthNs;
   bool timeAxisBinsCapped = false;
   if (requestedTimeBinsDouble > static_cast<double>(kMaxTimeAxisHistogramBins)) {
     nbins = static_cast<Int_t>(kMaxTimeAxisHistogramBins);
-    actualTimeBinWidthNs = requestedAxisHighNs > 0.0
-                             ? requestedAxisHighNs / static_cast<double>(nbins)
+    actualTimeBinWidthNs = requestedAxisSpanNs > 0.0
+                             ? requestedAxisSpanNs / static_cast<double>(nbins)
                              : binWidthNs;
     timeAxisBinsCapped = true;
   } else {
     nbins = std::max(1, static_cast<Int_t>(requestedTimeBinsDouble));
   }
-  const double xHigh = nbins * actualTimeBinWidthNs;
+  const double xHigh = axisLowNs + nbins * actualTimeBinWidthNs;
 
   // EN: Event-level axis: one fill per top-level MFM event.
   // CN: event 级时间轴：每个顶层 MFM event 填一次。
   TH1D *hEvent = new TH1D(
       "raw_event_time_axis",
       "Raw event counts vs TS time;Time from first raw event (ns);Top-level MFM events / bin",
-      nbins, 0.0, xHigh);
+      nbins, axisLowNs, xHigh);
 
   // EN: All-frame axis: top frame plus all nested frames recorded in RawTree vectors.
   // CN: 全部 frame 时间轴：包含顶层 frame 和 RawTree 向量中记录的所有子 frame。
   TH1D *hFrameAll = new TH1D(
       "raw_frame_time_axis_all",
       "Raw frame counts vs TS time, all frames;Time from first raw event (ns);Frames / bin",
-      nbins, 0.0, xHigh);
+      nbins, axisLowNs, xHigh);
 
   // EN: EXO2-only axis: raw_frame_type == 0x10, useful for EXOGAM crystal-fire timing.
   // CN: 只看 EXO2 frame：raw_frame_type == 0x10，用于查看 EXOGAM crystal fire 时间结构。
   TH1D *hFrameExo2 = new TH1D(
       "raw_frame_time_axis_exo2",
       "Raw EXO2 frame counts vs TS time;Time from first raw event (ns);EXO2 frames / bin",
-      nbins, 0.0, xHigh);
+      nbins, axisLowNs, xHigh);
 
   for (double t : eventTimesNs) hEvent->Fill(t);
   for (double t : frameAllTimesNs) hFrameAll->Fill(t);
   for (double t : frameExo2TimesNs) hFrameExo2->Fill(t);
+
+  TH1D *hEventDensity = BuildDensityPer10nsHistogram(
+      hEvent,
+      "raw_event_density_per_10ns",
+      "Raw event density vs TS time;Time from first raw event (ns);Top-level MFM events / 10 ns",
+      actualTimeBinWidthNs);
+  TH1D *hFrameAllDensity = BuildDensityPer10nsHistogram(
+      hFrameAll,
+      "raw_frame_all_density_per_10ns",
+      "Raw all-frame density vs TS time;Time from first raw event (ns);Frames / 10 ns",
+      actualTimeBinWidthNs);
+  TH1D *hFrameExo2Density = BuildDensityPer10nsHistogram(
+      hFrameExo2,
+      "raw_frame_exo2_density_per_10ns",
+      "Raw EXO2-frame density vs TS time;Time from first raw event (ns);EXO2 frames / 10 ns",
+      actualTimeBinWidthNs);
 
   TGraph *gEventCumulative = BuildCumulativeGraph(
       eventTimesNs,
@@ -412,16 +503,22 @@ void draw_raw_timestamp_axis(const char *inputFile,
 
   TString config;
   config.Form("input=%s; tree=%s; mode=%s; time_window_or_max_events=%.9g; "
-              "time_window_ns=%.9g; entries_to_read=%lld; bin_width_ns=%.9g; "
+              "time_start_ns=%.9g; time_stop_ns=%.9g; scan_full_time_range=%d; "
+              "entries_to_read=%lld; bin_width_ns=%.9g; time_axis_low_ns=%.9g; "
               "time_axis_high_ns=%.9g; requested_bin_width_ns=%.9g; actual_bin_width_ns=%.9g; "
-              "requested_time_bins=%.9g; hist_bins=%d; bins_capped=%d; "
+              "density_unit=counts_per_10ns; requested_time_bins=%.9g; hist_bins=%d; bins_capped=%d; "
               "ts_tick_to_ns=%.9g; limit_by_event_count=%d; stopped_by_time_window=%d; "
               "events_read=%lld; nonzero_top_ts_events=%lld; events_filled=%lld; "
-              "all_frames_filled=%lld; exo2_frames_filled=%lld",
-              inputFile, treeName, limitByEventCount ? "entry_count" : "time_window",
-              timeWindowOrMaxEvents, requestedTimeWindowNs,
+              "all_frames_filled=%lld; exo2_frames_filled=%lld; "
+              "exo2_frames_with_core_energy=%lld; exo2_frames_with_core_energy_gt10=%lld; "
+              "exo2_frames_with_bgo_or_csi_only=%lld",
+              inputFile, treeName,
+              limitByEventCount ? "entry_count" : (scanFullTimeRange ? "full_time_range" : "time_window"),
+              timeWindowOrMaxEvents, requestedTimeStartNs,
+              std::isinf(requestedTimeStopNs) ? -1.0 : requestedTimeStopNs,
+              static_cast<int>(scanFullTimeRange),
               static_cast<long long>(entriesToRead),
-              binWidthNs, xHigh, binWidthNs, actualTimeBinWidthNs,
+              binWidthNs, axisLowNs, xHigh, binWidthNs, actualTimeBinWidthNs,
               requestedTimeBinsDouble, nbins, static_cast<int>(timeAxisBinsCapped),
               kTsTickToNs, static_cast<int>(limitByEventCount),
               static_cast<int>(stoppedByTimeWindow),
@@ -429,12 +526,18 @@ void draw_raw_timestamp_axis(const char *inputFile,
               static_cast<long long>(eventsWithNonZeroTS),
               static_cast<long long>(eventsFilled),
               static_cast<long long>(allFramesFilled),
-              static_cast<long long>(exo2FramesFilled));
+              static_cast<long long>(exo2FramesFilled),
+              static_cast<long long>(selectedExo2FramesWithCoreEnergy),
+              static_cast<long long>(selectedExo2FramesWithCoreEnergyGt10),
+              static_cast<long long>(selectedExo2FramesWithBgoOrCsiOnly));
   TNamed runInfo("raw_timestamp_axis_config", config.Data());
 
   hEvent->Write();
   hFrameAll->Write();
   hFrameExo2->Write();
+  if (hEventDensity) hEventDensity->Write();
+  if (hFrameAllDensity) hFrameAllDensity->Write();
+  if (hFrameExo2Density) hFrameExo2Density->Write();
   hEventDelta->Write();
   hFrameExo2Delta->Write();
   gEventCumulative->Write();
@@ -452,6 +555,16 @@ void draw_raw_timestamp_axis(const char *inputFile,
   canvas->cd(3);
   hFrameExo2->Draw("hist");
   canvas->Write();
+
+  TCanvas *densityCanvas = new TCanvas("c_raw_timestamp_density_per_10ns", "Raw timestamp density per 10 ns", 1200, 900);
+  densityCanvas->Divide(1, 3);
+  densityCanvas->cd(1);
+  if (hEventDensity) hEventDensity->Draw("hist");
+  densityCanvas->cd(2);
+  if (hFrameAllDensity) hFrameAllDensity->Draw("hist");
+  densityCanvas->cd(3);
+  if (hFrameExo2Density) hFrameExo2Density->Draw("hist");
+  densityCanvas->Write();
 
   TCanvas *cumulativeCanvas = new TCanvas("c_raw_timestamp_cumulative", "Raw cumulative timestamp axis", 1200, 900);
   cumulativeCanvas->Divide(1, 3);
@@ -477,20 +590,23 @@ void draw_raw_timestamp_axis(const char *inputFile,
   std::cout << "Wrote / 写出: " << outName << std::endl;
   std::cout << "Read mode / 读取模式: "
             << (limitByEventCount ? "entry count / 固定 event 数"
-                                  : "time window / 固定 TS 时间窗口")
+                                  : (scanFullTimeRange ? "full time range / 完整 TS 范围"
+                                                       : "time window / 固定 TS 时间窗口"))
             << std::endl;
-  if (!limitByEventCount) {
-    std::cout << "Requested time window / 请求时间窗口(ns): "
-              << requestedTimeWindowNs << std::endl;
+  if (!limitByEventCount && !scanFullTimeRange) {
+    std::cout << "Requested time interval / 请求时间区间(ns): ["
+              << requestedTimeStartNs << ", " << requestedTimeStopNs << "]" << std::endl;
   }
   std::cout << "Events read / 读取 event 数: " << eventsRead << std::endl;
   std::cout << "Non-zero top TS events / 非零 top TS event 数: " << eventsWithNonZeroTS << std::endl;
   std::cout << "Events filled / 填充 event 数: " << eventsFilled << std::endl;
+  std::cout << "Time axis low / 时间轴下限(ns): " << axisLowNs << std::endl;
   std::cout << "Time axis high / 时间轴上限(ns): " << xHigh << std::endl;
   std::cout << "Requested time bins / 请求时间轴 bin 数: " << requestedTimeBinsDouble << std::endl;
   std::cout << "Histogram bins / 实际直方图 bin 数: " << nbins << std::endl;
   std::cout << "Requested bin width / 请求 bin 宽(ns): " << binWidthNs << std::endl;
   std::cout << "Actual bin width / 实际 bin 宽(ns): " << actualTimeBinWidthNs << std::endl;
+  std::cout << "Density histograms / 密度图单位: counts / 10 ns" << std::endl;
   if (timeAxisBinsCapped) {
     std::cout << "Warning / 注意: requested ns-bin histogram was too large; "
               << "histogram bin count was capped, while cumulative graphs keep exact timestamps."
@@ -510,6 +626,12 @@ void draw_raw_timestamp_axis(const char *inputFile,
             << maxEventDeltaTicks * kTsTickToNs << " ns" << std::endl;
   std::cout << "All frames filled / 填充 frame 数: " << allFramesFilled << std::endl;
   std::cout << "EXO2 frames filled / 填充 EXO2 frame 数: " << exo2FramesFilled << std::endl;
+  std::cout << "EXO2 frames with positive core raw energy / core 原始能量>0 的 EXO2 frame 数: "
+            << selectedExo2FramesWithCoreEnergy << " / " << selectedExo2Frames << std::endl;
+  std::cout << "EXO2 frames with core raw energy > 10 / core 原始能量>10 的 EXO2 frame 数: "
+            << selectedExo2FramesWithCoreEnergyGt10 << " / " << selectedExo2Frames << std::endl;
+  std::cout << "EXO2 frames with BGO/CSI only and no core / 只有 BGO/CSI、没有 core 能量的 EXO2 frame 数: "
+            << selectedExo2FramesWithBgoOrCsiOnly << std::endl;
   std::cout << "Cumulative graphs written / 已写出累计曲线: "
             << "raw_event_cumulative_count_vs_time, "
             << "raw_frame_all_cumulative_count_vs_time, "
