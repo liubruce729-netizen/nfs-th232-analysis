@@ -187,6 +187,63 @@ To generate an input list from an output directory recursively:
 默认只匹配 `nfs_run_*_r*.root`，不会包含 `mult3_nfs_run_*.root` 或 `nfs_histoExogam2_*.root`。
 By default it only matches `nfs_run_*_r*.root`, excluding `mult3_nfs_run_*.root` and `nfs_histoExogam2_*.root`.
 
+## RawTree EXO Gamma Timing Spectrum / RawTree EXO Gamma 时间谱分析
+
+`analyze_raw_exo_gamma_timing_spectrum.C` 用于在不知道束流周期时，从 RawTree 中的 EXO2 gamma frame 搜索周期成分。
+`analyze_raw_exo_gamma_timing_spectrum.C` searches periodic timing components from RawTree EXO2 gamma frames when the beam period is unknown.
+
+筛选条件：
+Selection:
+
+```text
+raw_frame_type == 0x10
+and (raw_exo_inner_m6 > gammaThreshold or raw_exo_inner_m20 > gammaThreshold)
+```
+
+也就是说，它只分析 EXO2 frame，并要求有 core gamma 原始能量；不会把 merge/top frame 或只有 BGO/CSI 的 frame 放进周期分析。
+It uses only EXO2 frames with positive core gamma raw energy; merge/top frames and BGO/CSI-only frames are excluded from the period search.
+
+默认搜索周期范围是 `200-50000 ns`，步长 `10 ns`，使用 epoch-folding periodogram：对每个候选周期折叠相位，然后计算相位分布相对均匀分布的 `chi-square` 强度。
+The default period range is `200-50000 ns` with `10 ns` steps. The method is an epoch-folding periodogram: each trial period is used to fold event phases, and the phase distribution is scored with `chi-square` against a flat distribution.
+
+```bash
+cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
+source /home/user0/work/IJCLAB/NFS/NFS_env.sh
+root -l -b -q 'lsy_nfs/analyze_raw_exo_gamma_timing_spectrum.C("out/nfs_run_23_r0.root")'
+```
+
+如果看到某个候选周期，可以缩小范围再精扫，例如：
+After a candidate period is found, refine the scan in a narrower range:
+
+```bash
+root -l -b -q 'lsy_nfs/analyze_raw_exo_gamma_timing_spectrum.C("out/nfs_run_23_r0.root","RawTree",1200,1500,2,"out/exo_gamma_period_1200_1500.root")'
+```
+
+参数顺序：
+Arguments:
+
+```text
+inputFile, treeName, minPeriodNs, maxPeriodNs, periodStepNs, outputFile,
+gammaThreshold, maxSearchFrames, searchPhaseBins, nTopPeriods, foldBins,
+timeStartNs, timeStopNs
+```
+
+- `gammaThreshold`: default `10`; raw EXO core energy threshold / 默认 `10`，EXO core 原始能量阈值
+- `maxSearchFrames`: default `100000`; evenly sampled frames used in the period scan, `0` means use all / 默认 `100000`，周期扫描抽样数，`0` 表示全部使用
+- `searchPhaseBins`: default `64`; phase bins used during period search / 默认 `64`，搜索时相位 bin 数
+- `nTopPeriods`: default `6`; number of strongest candidates to fold / 默认 `6`，输出折叠图的最强候选数
+- `foldBins`: default `512`; phase bins in final folded histograms / 默认 `512`，最终折叠图相位 bin 数
+- `timeStartNs`, `timeStopNs`: optional time selection after subtracting first non-zero top TS / 可选时间选择，单位 ns，已减去第一个非零 top TS
+
+主要输出对象：
+Main output objects:
+
+- `raw_exo_gamma_periodogram_period_ns`: trial period vs epoch-folding power / 候选周期-谱强度
+- `raw_exo_gamma_periodogram_frequency_mhz`: frequency vs epoch-folding power / 频率-谱强度
+- `raw_exo_gamma_period_candidates`: strongest candidate table / 最强候选周期表
+- `raw_exo_gamma_fold_period_rank*`: selected frames folded by the strongest periods / 按最强候选周期折叠后的相位图
+- `raw_exo_gamma_timing_spectrum_config`: run settings and selection counts / 参数和筛选统计
+
 ## Fission Event Analysis / 裂变事件分析
 
 基于 ADNE 新产生的 `mult3_nfs_*.root` 文件，读取 `TreeMaster` 中的 `f_E877_Clover_*` 分支，对 veto 后且时间 cut 后仍满足 clover 多重度默认为 `>=2` 的事件做分 bin gamma 谱、gamma-gamma 符合矩阵，以及 clover gamma 能量-时间二维图。
