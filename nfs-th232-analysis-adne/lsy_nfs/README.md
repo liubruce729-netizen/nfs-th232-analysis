@@ -244,6 +244,40 @@ Main output objects:
 - `raw_exo_gamma_fold_period_rank*`: selected frames folded by the strongest periods / 按最强候选周期折叠后的相位图
 - `raw_exo_gamma_timing_spectrum_config`: run settings and selection counts / 参数和筛选统计
 
+
+## Calibrated Fission Analysis / 带刻度的裂变事件分析
+
+`fission_event_ana_calibrated.C` 从 `mult3_nfs_run_*.root` 的 crystal 级分支重新构建 clover addback，因此可以在裂变判选前应用每个 run、每个 crystal 的能量和时间刻度。
+`fission_event_ana_calibrated.C` rebuilds clover addback from crystal-level branches in `mult3_nfs_run_*.root`, so per-run and per-crystal energy/time calibrations are applied before fission cuts.
+
+能量修正使用：`E_cal = energy_offset + energy_gain * E_raw`。时间默认使用平移修正：`T_cal = T_raw + time_offset_to_442_ns`；也可以在 launcher 中用 `--time-mode gain|offset_gain|gain_offset` 切换。
+Energy correction is `E_cal = energy_offset + energy_gain * E_raw`. Time correction defaults to an offset shift, `T_cal = T_raw + time_offset_to_442_ns`; use `--time-mode gain|offset_gain|gain_offset` in the launcher for alternatives.
+
+推荐使用并行 launcher：
+Recommended parallel launcher:
+
+```bash
+./lsy_nfs/run_fission_event_ana_calibrated_parallel.py \
+  --input /path/to/adne/output_or_parent_dir \
+  --calibration-summary calibratejuly0910/calibration_summary.tsv \
+  --output out/fission_event_ana_calibrated.root \
+  --jobs 8 \
+  --distance 24 \
+  --time-fwhm 20 \
+  --energy-bins 4,10,20,50 \
+  --time-branch fTime
+```
+
+`--input` 可以重复给多个文件或目录；目录会递归搜索 `mult3_nfs_run_*.root`。每个并行 job 写一个独立 partial ROOT 文件，所有 job 完成后再用 `hadd` 合并到最终输出，避免多个进程同时写同一个 ROOT 文件。
+`--input` can be repeated with files or directories; directories are searched recursively for `mult3_nfs_run_*.root`. Each parallel job writes an independent partial ROOT file, and the final output is produced with `hadd` only after all jobs finish, avoiding concurrent writes to the same ROOT file.
+
+核心 ROOT 宏也可以单独运行：
+The ROOT macro can also be run directly:
+
+```bash
+root -l -b -q 'lsy_nfs/fission_event_ana_calibrated.C("@mult3_files.txt","calibration_summary.tsv",24,20,"4,10,20,50","out/fission_event_ana_calibrated.root")'
+```
+
 ## Fission Event Analysis / 裂变事件分析
 
 基于 ADNE 新产生的 `mult3_nfs_*.root` 文件，读取 `TreeMaster` 中的 `f_E877_Clover_*` 分支，对 veto 后且时间 cut 后仍满足 clover 多重度默认为 `>=2` 的事件做分 bin gamma 谱、gamma-gamma 符合矩阵，以及 clover gamma 能量-时间二维图。
