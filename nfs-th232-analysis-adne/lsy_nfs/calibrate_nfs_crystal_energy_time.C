@@ -8,10 +8,12 @@
 //
 // EN: Energy spectra are rebuilt with 0.5-channel bins in [0,4096].
 //     Peaks are fitted with Gaussian + linear background.
-//     Time spectra use fTime by default. The prompt peak is first locked with a
-//     Gaussian-only fit, then refitted with Gaussian + radioactive build-up tail.
+//     Time spectra use fTime by default. The prompt peak width is estimated from
+//     its FWHM, then locked with a Gaussian-only fit and refitted with
+//     Gaussian + radioactive build-up tail.
 // CN: 能量谱重新按 0.5/bin、[0,4096] 建谱；峰形采用高斯 + 直线本底拟合。
-//     时间谱默认使用 fTime；先用纯高斯锁定 prompt 峰位，再用高斯 + 核素生成-衰变项联合拟合。
+//     时间谱默认使用 fTime；先用半高宽估计 prompt 峰宽，再用纯高斯锁定峰位，
+//     最后用高斯 + 核素生成-衰变项联合拟合。
 
 #include <algorithm>
 #include <cmath>
@@ -100,18 +102,18 @@ Double_t TimeFitFunction(Double_t *x, Double_t *p)
 {
   const double xx = x[0];
   const double mean = p[1];
+  const double buildStart = p[5];
   double value = p[0] * TMath::Gaus(xx, mean, p[2], false);
 
-  // EN: After the prompt peak, model a daughter population created at an
-  //     approximately constant rate while decaying: dN/dt = R - lambda N.
-  //     With N(t0)=0, the observable activity is proportional to
-  //     1 - exp(-(t-t0)/tau). This avoids forcing a pure falling exponential
-  //     to absorb the Gaussian centroid.
-  // CN: prompt 峰后，用近似常数速率产生、同时按寿命衰变的核素数描述：
-  //     dN/dt = R - lambda N。若 N(t0)=0，则活度近似正比于
-  //     1 - exp(-(t-t0)/tau)，避免纯下降指数把高斯峰心拖偏。
-  if (xx >= mean && p[4] > 0.0) {
-    value += p[3] * (1.0 - TMath::Exp(-(xx - mean) / p[4]));
+  // EN: After a movable start time near the prompt peak, model a daughter
+  //     population created at an approximately constant rate while decaying:
+  //     dN/dt = R - lambda N. With N(t0)=0, the observable activity is
+  //     proportional to 1 - exp(-(t-t0)/tau).
+  // CN: 在 prompt 峰附近允许一个可移动起点；起点之后，用近似常数速率产生、
+  //     同时按寿命衰变的核素数描述：dN/dt = R - lambda N。若 N(t0)=0，
+  //     活度近似正比于 1 - exp(-(t-t0)/tau)。
+  if (xx >= buildStart && p[4] > 0.0) {
+    value += p[3] * (1.0 - TMath::Exp(-(xx - buildStart) / p[4]));
   }
   return value;
 }
@@ -219,6 +221,56 @@ int FindMaxBinInRange(TH1 *hist, double low, double high)
   return bestBin;
 }
 
+double EstimatePeakFwhm(TH1 *hist, int seedBin, double searchLow, double searchHigh)
+{
+  // EN: Rough FWHM from half-height crossings around the seed maximum.
+  // CN: 从峰顶向两侧找半高点，得到粗略 FWHM，用于决定时间拟合窗口。
+  if (!hist || seedBin < 1 || seedBin > hist->GetNbinsX()) return 6.0;
+
+  const double seed = hist->GetBinCenter(seedBin);
+  const double peak = hist->GetBinContent(seedBin);
+  if (peak <= 0.0) return 6.0;
+
+  const int lowBin = std::max(1, hist->GetXaxis()->FindBin(searchLow));
+  const int highBin = std::min(hist->GetNbinsX(), hist->GetXaxis()->FindBin(searchHigh));
+  const double edgeLow = hist->GetBinContent(lowBin);
+  const double edgeHigh = hist->GetBinContent(highBin);
+  const double baseline = std::max(0.0, std::min(edgeLow, edgeHigh));
+  const double half = baseline + 0.5 * (peak - baseline);
+
+  auto interpolateCrossing = [&](int binNear, int binFar) {
+    const double x1 = hist->GetBinCenter(binNear);
+    const double y1 = hist->GetBinContent(binNear);
+    const double x2 = hist->GetBinCenter(binFar);
+    const double y2 = hist->GetBinContent(binFar);
+    if (std::fabs(y2 - y1) < 1e-12) return 0.5 * (x1 + x2);
+    const double fraction = (half - y1) / (y2 - y1);
+    return x1 + fraction * (x2 - x1);
+  };
+
+  double left = std::numeric_limits<double>::quiet_NaN();
+  for (int b = seedBin; b > lowBin; --b) {
+    if (hist->GetBinContent(b) >= half && hist->GetBinContent(b - 1) < half) {
+      left = interpolateCrossing(b, b - 1);
+      break;
+    }
+  }
+
+  double right = std::numeric_limits<double>::quiet_NaN();
+  for (int b = seedBin; b < highBin; ++b) {
+    if (hist->GetBinContent(b) >= half && hist->GetBinContent(b + 1) < half) {
+      right = interpolateCrossing(b, b + 1);
+      break;
+    }
+  }
+
+  if (!std::isfinite(left)) left = seed - 6.0;
+  if (!std::isfinite(right)) right = seed + 6.0;
+  const double fwhm = right - left;
+  if (!std::isfinite(fwhm) || fwhm <= 0.0) return 6.0;
+  return std::min(120.0, std::max(2.0, fwhm));
+}
+
 PeakFitResult FitEnergyPeak(TH1F *hist, const PeakRequest &request, int detector, double fitHalfWidth)
 {
   PeakFitResult result;
@@ -274,10 +326,12 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   const double seedContent = hist->GetBinContent(seedBin);
   result.seed = seed;
 
-  // EN: First lock the prompt peak with a narrow Gaussian-only fit. The
-  //     radioactive build-up component is added only after this centroid seed is stable.
-  // CN: 先用窄窗口纯高斯锁定 prompt 峰位；只有峰心种子稳定后，才加入核素生成-衰变项。
-  const double gaussianHalfWidth = std::min(12.0, std::max(4.0, fitPre * 0.5));
+  // EN: Estimate a rough FWHM first. The Gaussian seed window follows the
+  //     observed peak width instead of a fixed narrow value.
+  // CN: 先根据半高点估计粗略 FWHM；高斯 seed 窗口跟随实际峰宽，而不是固定窄窗口。
+  const double roughFwhm = EstimatePeakFwhm(hist, seedBin, kTimeMin, searchHigh);
+  const double roughSigma = std::max(0.5, roughFwhm / 2.354820045);
+  const double gaussianHalfWidth = std::min(120.0, std::max(4.0, roughFwhm));
   const double gaussianLow = std::max(kTimeMin, seed - gaussianHalfWidth);
   const double gaussianHigh = std::min(searchHigh, seed + gaussianHalfWidth);
   if (gaussianHigh <= gaussianLow) return result;
@@ -285,10 +339,10 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   TF1 *gaussianFit = new TF1(TString::Format("fit_time_gaussian_seed_det%d", detector),
                              TimeGaussianFunction, gaussianLow, gaussianHigh, 3);
   gaussianFit->SetParNames("GausAmp", "GausMean", "GausSigma");
-  gaussianFit->SetParameters(std::max(1.0, seedContent), seed, 2.0);
+  gaussianFit->SetParameters(std::max(1.0, seedContent), seed, roughSigma);
   gaussianFit->SetParLimits(0, std::max(0.1, seedContent * 0.05), std::max(10.0, seedContent * 5.0));
   gaussianFit->SetParLimits(1, gaussianLow, gaussianHigh);
-  gaussianFit->SetParLimits(2, 0.15, gaussianHalfWidth);
+  gaussianFit->SetParLimits(2, std::max(0.20, roughSigma * 0.50), std::max(gaussianHalfWidth, roughSigma * 3.0));
   gaussianFit->SetLineColor(kGreen + 2);
   gaussianFit->SetLineStyle(2);
 
@@ -296,16 +350,19 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   double lockedAmp = gaussianFit->GetParameter(0);
   double lockedMean = gaussianFit->GetParameter(1);
   double lockedSigma = std::fabs(gaussianFit->GetParameter(2));
+  double lockedFwhm = 2.354820045 * lockedSigma;
   if (int(gaussianResult) != 0 || !std::isfinite(lockedMean) ||
       lockedMean < gaussianLow || lockedMean > gaussianHigh ||
       !std::isfinite(lockedSigma) || lockedSigma <= 0.0) {
     lockedAmp = std::max(1.0, seedContent);
     lockedMean = seed;
-    lockedSigma = 2.0;
+    lockedSigma = std::max(roughFwhm / 2.354820045, 1.0);
+    lockedFwhm = 2.354820045 * lockedSigma;
   }
 
-  const double fitLow = std::max(kTimeMin, lockedMean - fitPre);
-  const double fitHigh = std::min(kTimeMax, lockedMean + fitPost);
+  const double finalHalfWidth = std::min(250.0, std::max(8.0, 2.0 * std::max(lockedFwhm, roughFwhm)));
+  const double fitLow = std::max(kTimeMin, lockedMean - finalHalfWidth);
+  const double fitHigh = std::min(kTimeMax, lockedMean + finalHalfWidth);
   if (fitHigh <= fitLow) return result;
 
   const int lateLowBin = hist->GetXaxis()->FindBin(std::min(fitHigh, lockedMean + std::max(10.0, lockedSigma * 4.0)));
@@ -318,21 +375,39 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   }
   if (lateBins > 0) lateLevel /= static_cast<double>(lateBins);
 
-  TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 5);
-  fit->SetParNames("GausAmp", "GausMean", "GausSigma", "BuildAmp", "BuildTau");
-  fit->SetParameters(lockedAmp, lockedMean, lockedSigma, std::max(0.1, lateLevel), 35.0);
+  TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 6);
+  fit->SetParNames("GausAmp", "GausMean", "GausSigma", "BuildAmp", "BuildTau", "BuildStart");
 
   const double meanGuard = std::max(2.0, lockedSigma * 1.5);
-  const double sigmaLow = std::max(0.10, lockedSigma * 0.35);
-  const double sigmaHigh = std::min(30.0, std::max(lockedSigma * 2.5, lockedSigma + 1.0));
-  fit->SetParLimits(0, std::max(0.1, lockedAmp * 0.25), std::max(10.0, lockedAmp * 4.0));
-  fit->SetParLimits(1, std::max(kTimeMin, lockedMean - meanGuard), std::min(searchHigh, lockedMean + meanGuard));
+  const double sigmaLow = std::max({0.20, lockedSigma * 0.35, roughSigma * 0.50});
+  const double sigmaHigh = std::min(60.0, std::max({lockedSigma * 2.5, lockedSigma + 1.0, roughSigma * 3.0}));
+  const double ampLow = std::max(0.1, lockedAmp * 0.25);
+  const double ampHigh = std::max(10.0, lockedAmp * 4.0);
+  const double meanLow = std::max(kTimeMin, lockedMean - meanGuard);
+  const double meanHigh = std::min(searchHigh, lockedMean + meanGuard);
+  const double buildAmpHigh = std::max({1.0, lockedAmp * 3.0, lateLevel * 10.0});
+  const double buildStartLow = std::max(fitLow, lockedMean - 15.0);
+  const double buildStartHigh = std::min(fitHigh, lockedMean + 15.0);
+  const double initialSigma = std::min(sigmaHigh * 0.95, std::max(sigmaLow * 1.05, lockedSigma));
+  const double initialBuildAmp = std::min(buildAmpHigh * 0.5, std::max(0.1, lateLevel));
+  const double initialBuildStart = std::min(buildStartHigh, std::max(buildStartLow, lockedMean));
+  fit->SetParameters(
+      std::min(ampHigh * 0.95, std::max(ampLow * 1.05, lockedAmp)),
+      std::min(meanHigh, std::max(meanLow, lockedMean)),
+      initialSigma,
+      initialBuildAmp,
+      35.0,
+      initialBuildStart);
+
+  fit->SetParLimits(0, ampLow, ampHigh);
+  fit->SetParLimits(1, meanLow, meanHigh);
   fit->SetParLimits(2, sigmaLow, sigmaHigh);
   // EN: BuildAmp is the asymptotic activity level of the constant-production
-  //     radioactive component. It starts from zero at the Gaussian centroid.
-  // CN: BuildAmp 是常数生成-衰变项的渐近活度；该项在高斯峰心处从 0 开始。
-  fit->SetParLimits(3, 0.0, std::max({1.0, lockedAmp * 3.0, lateLevel * 10.0}));
+  //     radioactive component. It starts from zero at BuildStart.
+  // CN: BuildAmp 是常数生成-衰变项的渐近活度；该项在 BuildStart 处从 0 开始。
+  fit->SetParLimits(3, 0.0, buildAmpHigh);
   fit->SetParLimits(4, 1.0, 2000.0);
+  fit->SetParLimits(5, buildStartLow, buildStartHigh);
   fit->SetLineColor(kBlue + detector % 4);
 
   TFitResultPtr fitResult = hist->Fit(fit, "QRS0+");
