@@ -210,8 +210,8 @@ Arguments:
 inputMfmFile, startEvent, maxEvents, binWidthNs, outputFile, unfoldMerge, tsTickNs
 ```
 
-默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的 `delta_ts` 图、`mfm_frame_type_counts`，以及 `mfm_frame_table`。
-The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, the corresponding `delta_ts` histograms, `mfm_frame_type_counts`, and `mfm_frame_table`.
+默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的按 TS 排序 `delta_ts` 图、按读取顺序填充的 `mfm_all_frame_delta_ts_read_order` 和 `mfm_exo2_frame_delta_ts_read_order`、`mfm_frame_type_counts`，以及 `mfm_frame_table`。其中 `mfm_exo2_frame_delta_ts_read_order` 对应 ADNE `TimeStampDiffTExogam2` 的逻辑，即当前 EXO2 frame TS 减前一个 EXO2 frame TS。
+The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, TS-sorted `delta_ts` histograms, read-order histograms `mfm_all_frame_delta_ts_read_order` and `mfm_exo2_frame_delta_ts_read_order`, `mfm_frame_type_counts`, and `mfm_frame_table`. `mfm_exo2_frame_delta_ts_read_order` follows the ADNE `TimeStampDiffTExogam2` logic: current EXO2 frame TS minus previous EXO2 frame TS.
 
 ## RawTree EXO Gamma Timing Spectrum / RawTree EXO Gamma 时间谱分析
 

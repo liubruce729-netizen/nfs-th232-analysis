@@ -176,6 +176,69 @@ TH1D *MakeDeltaHistogram(const std::vector<Double_t> &timesNs,
   return MakeTimeHistogram(deltas, name, title, requestedBinWidthNs);
 }
 
+TH1D *MakeSignedValueHistogram(const std::vector<Double_t> &values,
+                              const char *name,
+                              const char *title,
+                              Double_t requestedBinWidthNs)
+{
+  if (values.empty()) {
+    TH1D *empty = new TH1D(name, title, 1, -0.5 * requestedBinWidthNs, 0.5 * requestedBinWidthNs);
+    empty->SetDirectory(nullptr);
+    return empty;
+  }
+
+  Double_t minValue = std::numeric_limits<Double_t>::infinity();
+  Double_t maxValue = -std::numeric_limits<Double_t>::infinity();
+  for (Double_t value : values) {
+    if (!std::isfinite(value)) continue;
+    if (value < minValue) minValue = value;
+    if (value > maxValue) maxValue = value;
+  }
+  if (!std::isfinite(minValue) || !std::isfinite(maxValue)) {
+    minValue = -0.5 * requestedBinWidthNs;
+    maxValue = 0.5 * requestedBinWidthNs;
+  }
+
+  minValue = std::floor(minValue / requestedBinWidthNs) * requestedBinWidthNs;
+  maxValue = std::ceil(maxValue / requestedBinWidthNs) * requestedBinWidthNs;
+  if (maxValue <= minValue) maxValue = minValue + requestedBinWidthNs;
+
+  Long64_t requestedBins = std::max<Long64_t>(1, static_cast<Long64_t>(std::ceil((maxValue - minValue) / requestedBinWidthNs)));
+  Long64_t nbins = std::min<Long64_t>(requestedBins, kMaxHistogramBins);
+  if (requestedBins > kMaxHistogramBins) {
+    const Double_t center = 0.5 * (minValue + maxValue);
+    const Double_t halfWidth = 0.5 * requestedBinWidthNs * static_cast<Double_t>(kMaxHistogramBins);
+    minValue = center - halfWidth;
+    maxValue = center + halfWidth;
+  }
+
+  maxValue = std::nextafter(maxValue, std::numeric_limits<Double_t>::infinity());
+  TH1D *hist = new TH1D(name, title, static_cast<Int_t>(nbins), minValue, maxValue);
+  hist->SetDirectory(nullptr);
+  for (Double_t value : values) {
+    if (std::isfinite(value)) hist->Fill(value);
+  }
+  return hist;
+}
+
+TH1D *MakeReadOrderDeltaHistogram(const std::vector<ULong64_t> &ticks,
+                                  const char *name,
+                                  const char *title,
+                                  Double_t tsTickNs,
+                                  Double_t requestedBinWidthNs)
+{
+  std::vector<Double_t> deltas;
+  if (ticks.size() >= 2) {
+    deltas.reserve(ticks.size() - 1);
+    for (std::size_t i = 1; i < ticks.size(); ++i) {
+      const Long64_t current = static_cast<Long64_t>(ticks[i]);
+      const Long64_t previous = static_cast<Long64_t>(ticks[i - 1]);
+      deltas.push_back(static_cast<Double_t>(current - previous) * tsTickNs);
+    }
+  }
+  return MakeSignedValueHistogram(deltas, name, title, requestedBinWidthNs);
+}
+
 void SaveCanvas(TH1 *hist, const char *drawOpt = "hist")
 {
   if (!hist) return;
@@ -353,8 +416,18 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                     binWidthNs);
   TH1D *hExoDt = MakeDeltaHistogram(exo2FrameTimesNs,
                                     "mfm_exo2_frame_delta_ts",
-                                    "Delta TS between consecutive EXO2 frames;#DeltaT (ns);Pairs / bin",
+                                    "Delta TS between consecutive EXO2 frames;#DeltaT sorted by TS (ns);Pairs / bin",
                                     binWidthNs);
+  TH1D *hAllReadOrderDt = MakeReadOrderDeltaHistogram(
+      allFrameTs,
+      "mfm_all_frame_delta_ts_read_order",
+      "ADNE-like Delta TS between consecutive frames in read order;#DeltaT in read order (ns);Pairs / bin",
+      tsTickNs, binWidthNs);
+  TH1D *hExoReadOrderDt = MakeReadOrderDeltaHistogram(
+      exo2FrameTs,
+      "mfm_exo2_frame_delta_ts_read_order",
+      "ADNE-like Delta TS between consecutive EXO2 frames in read order;#DeltaT in read order (ns);Pairs / bin",
+      tsTickNs, binWidthNs);
 
   hTop->Write();
   hAll->Write();
@@ -362,6 +435,8 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   hTopDt->Write();
   hAllDt->Write();
   hExoDt->Write();
+  hAllReadOrderDt->Write();
+  hExoReadOrderDt->Write();
 
   TH1I hType("mfm_frame_type_counts", "MFM frame type counts;Frame type;Frames", 65536, 0, 65536);
   TH1I hZero("mfm_zero_ts_frame_type_counts", "MFM zero-TS frame type counts;Frame type;Frames with TS=0", 65536, 0, 65536);
@@ -410,6 +485,8 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   SaveCanvas(hTopDt);
   SaveCanvas(hAllDt);
   SaveCanvas(hExoDt);
+  SaveCanvas(hAllReadOrderDt);
+  SaveCanvas(hExoReadOrderDt);
 
   out.Close();
 
