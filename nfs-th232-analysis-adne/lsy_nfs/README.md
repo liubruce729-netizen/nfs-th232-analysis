@@ -106,8 +106,8 @@ Default energy peak windows:
 每个峰用 `Gaussian + linear background` 拟合，然后用 `E_cal = offset + gain * E_raw` 做线性刻度。
 Each peak is fitted with `Gaussian + linear background`, then a linear calibration `E_cal = offset + gain * E_raw` is produced.
 
-时间谱默认使用 `fTime`。在 `0-800 ns` 内找最高峰，用 `Gaussian + exponential tail` 拟合，其中指数尾部从高斯中心开始。输出中同时给出 `time_offset_to_442_ns = 442 - peak` 和 `time_gain_to_442 = 442 / peak`。
-The default time branch is `fTime`. The strongest peak below `800 ns` is fitted with `Gaussian + exponential tail`, where the exponential tail starts at the Gaussian mean. The output includes both `time_offset_to_442_ns = 442 - peak` and `time_gain_to_442 = 442 / peak`.
+时间谱默认使用 `fTime`。在 `0-800 ns` 内找最高峰，先用窄窗口纯高斯锁定 prompt 峰位，再用 `Gaussian + radioactive build-up` 联合拟合。build-up 项从高斯峰位开始为 0，之后按近似常数生成率同时衰变：`A*(1-exp(-(t-t0)/tau))`。输出中同时给出 `time_offset_to_442_ns = 442 - peak` 和 `time_gain_to_442 = 442 / peak`。
+The default time branch is `fTime`. The strongest peak below `800 ns` is first locked with a narrow Gaussian-only fit, then refitted with `Gaussian + radioactive build-up`. The build-up term is zero at the Gaussian mean and follows constant production with decay: `A*(1-exp(-(t-t0)/tau))`. The output includes both `time_offset_to_442_ns = 442 - peak` and `time_gain_to_442 = 442 / peak`.
 
 ```bash
 cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne

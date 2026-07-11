@@ -8,9 +8,10 @@
 //
 // EN: Energy spectra are rebuilt with 0.5-channel bins in [0,4096].
 //     Peaks are fitted with Gaussian + linear background.
-//     Time spectra use fTime by default and fit the strongest peak below 800 ns with Gaussian + exponential tail.
+//     Time spectra use fTime by default. The prompt peak is first locked with a
+//     Gaussian-only fit, then refitted with Gaussian + radioactive build-up tail.
 // CN: 能量谱重新按 0.5/bin、[0,4096] 建谱；峰形采用高斯 + 直线本底拟合。
-//     时间谱默认使用 fTime，在 800 ns 以内找最高峰，采用高斯 + 指数尾部拟合。
+//     时间谱默认使用 fTime；先用纯高斯锁定 prompt 峰位，再用高斯 + 核素生成-衰变项联合拟合。
 
 #include <algorithm>
 #include <cmath>
@@ -98,8 +99,20 @@ Double_t EnergyFitFunction(Double_t *x, Double_t *p)
 Double_t TimeFitFunction(Double_t *x, Double_t *p)
 {
   const double xx = x[0];
-  double value = p[0] * TMath::Gaus(xx, p[1], p[2], false);
-  if (xx >= p[1] && p[4] > 0.0) value += p[3] * TMath::Exp(-(xx - p[1]) / p[4]);
+  const double mean = p[1];
+  double value = p[0] * TMath::Gaus(xx, mean, p[2], false);
+
+  // EN: After the prompt peak, model a daughter population created at an
+  //     approximately constant rate while decaying: dN/dt = R - lambda N.
+  //     With N(t0)=0, the observable activity is proportional to
+  //     1 - exp(-(t-t0)/tau). This avoids forcing a pure falling exponential
+  //     to absorb the Gaussian centroid.
+  // CN: prompt 峰后，用近似常数速率产生、同时按寿命衰变的核素数描述：
+  //     dN/dt = R - lambda N。若 N(t0)=0，则活度近似正比于
+  //     1 - exp(-(t-t0)/tau)，避免纯下降指数把高斯峰心拖偏。
+  if (xx >= mean && p[4] > 0.0) {
+    value += p[3] * (1.0 - TMath::Exp(-(xx - mean) / p[4]));
+  }
   return value;
 }
 
@@ -261,9 +274,9 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   const double seedContent = hist->GetBinContent(seedBin);
   result.seed = seed;
 
-  // EN: First lock the peak with a narrow Gaussian-only fit. This prevents the
-  //     exponential tail from absorbing the prompt peak and moving the centroid.
-  // CN: 先用窄窗口纯高斯锁定峰位，避免后续指数尾部吞掉 prompt 峰并拖动峰心。
+  // EN: First lock the prompt peak with a narrow Gaussian-only fit. The
+  //     radioactive build-up component is added only after this centroid seed is stable.
+  // CN: 先用窄窗口纯高斯锁定 prompt 峰位；只有峰心种子稳定后，才加入核素生成-衰变项。
   const double gaussianHalfWidth = std::min(12.0, std::max(4.0, fitPre * 0.5));
   const double gaussianLow = std::max(kTimeMin, seed - gaussianHalfWidth);
   const double gaussianHigh = std::min(searchHigh, seed + gaussianHalfWidth);
@@ -295,9 +308,19 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   const double fitHigh = std::min(kTimeMax, lockedMean + fitPost);
   if (fitHigh <= fitLow) return result;
 
+  const int lateLowBin = hist->GetXaxis()->FindBin(std::min(fitHigh, lockedMean + std::max(10.0, lockedSigma * 4.0)));
+  const int lateHighBin = hist->GetXaxis()->FindBin(fitHigh);
+  double lateLevel = 0.0;
+  int lateBins = 0;
+  for (int b = std::max(1, lateLowBin); b <= std::min(hist->GetNbinsX(), lateHighBin); ++b) {
+    lateLevel += hist->GetBinContent(b);
+    ++lateBins;
+  }
+  if (lateBins > 0) lateLevel /= static_cast<double>(lateBins);
+
   TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 5);
-  fit->SetParNames("Amp", "Mean", "Sigma", "TailAmp", "Tau");
-  fit->SetParameters(lockedAmp, lockedMean, lockedSigma, std::max(0.1, lockedAmp * 0.05), 30.0);
+  fit->SetParNames("GausAmp", "GausMean", "GausSigma", "BuildAmp", "BuildTau");
+  fit->SetParameters(lockedAmp, lockedMean, lockedSigma, std::max(0.1, lateLevel), 35.0);
 
   const double meanGuard = std::max(2.0, lockedSigma * 1.5);
   const double sigmaLow = std::max(0.10, lockedSigma * 0.35);
@@ -305,10 +328,11 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   fit->SetParLimits(0, std::max(0.1, lockedAmp * 0.25), std::max(10.0, lockedAmp * 4.0));
   fit->SetParLimits(1, std::max(kTimeMin, lockedMean - meanGuard), std::min(searchHigh, lockedMean + meanGuard));
   fit->SetParLimits(2, sigmaLow, sigmaHigh);
-  // EN: The tail is a small correction after the Gaussian centroid, not the main peak.
-  // CN: 指数尾部只是高斯峰后的一个小修正，不允许替代主峰。
-  fit->SetParLimits(3, 0.0, std::max(1.0, lockedAmp * 0.35));
-  fit->SetParLimits(4, 2.0, 500.0);
+  // EN: BuildAmp is the asymptotic activity level of the constant-production
+  //     radioactive component. It starts from zero at the Gaussian centroid.
+  // CN: BuildAmp 是常数生成-衰变项的渐近活度；该项在高斯峰心处从 0 开始。
+  fit->SetParLimits(3, 0.0, std::max({1.0, lockedAmp * 3.0, lateLevel * 10.0}));
+  fit->SetParLimits(4, 1.0, 2000.0);
   fit->SetLineColor(kBlue + detector % 4);
 
   TFitResultPtr fitResult = hist->Fit(fit, "QRS0+");
@@ -413,6 +437,7 @@ void DrawCrystalCanvas(TDirectory *dir, int det, TH1F *energy, TH1F *time,
     drawEnergyPanel(static_cast<int>(i) + 2, requests[i].searchLow, requests[i].searchHigh, static_cast<int>(i));
   }
   canvas->Write();
+  delete canvas;
 
   TCanvas *timeCanvas = new TCanvas(TString::Format("c_time_cal_clover%d_crystal%d", clo, cri),
                                     TString::Format("Clover%d Crystal%d time calibration", clo, cri),
@@ -433,7 +458,7 @@ void DrawCrystalCanvas(TDirectory *dir, int det, TH1F *energy, TH1F *time,
     legend->SetFillStyle(0);
     legend->AddEntry(timeCopy, "Time spectrum", "l");
     if (gaussianFit) legend->AddEntry(gaussianFit, "Gaussian seed fit", "l");
-    if (finalFit) legend->AddEntry(finalFit, "Gaussian + small tail", "l");
+    if (finalFit) legend->AddEntry(finalFit, "Gaussian + build-up decay", "l");
     if (timeFit.ok) {
       legend->AddEntry((TObject *)nullptr, TString::Format("peak %.3f ns", timeFit.mean), "");
       legend->AddEntry((TObject *)nullptr, TString::Format("offset %.3f ns", kTargetTimeNs - timeFit.mean), "");
@@ -441,6 +466,7 @@ void DrawCrystalCanvas(TDirectory *dir, int det, TH1F *energy, TH1F *time,
     legend->Draw();
   }
   timeCanvas->Write();
+  delete timeCanvas;
 }
 
 void WriteDetailedText(const TString &path,
