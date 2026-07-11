@@ -210,8 +210,11 @@ Arguments:
 inputMfmFile, startEvent, maxEvents, binWidthNs, outputFile, unfoldMerge, tsTickNs
 ```
 
-默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的按 TS 排序 `delta_ts` 图、按读取顺序填充的 `mfm_all_frame_delta_ts_read_order` 和 `mfm_exo2_frame_delta_ts_read_order`、`mfm_frame_type_counts`，以及 `mfm_frame_table`。其中 `mfm_exo2_frame_delta_ts_read_order` 对应 ADNE `TimeStampDiffTExogam2` 的逻辑，即当前 EXO2 frame TS 减前一个 EXO2 frame TS。
-The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, TS-sorted `delta_ts` histograms, read-order histograms `mfm_all_frame_delta_ts_read_order` and `mfm_exo2_frame_delta_ts_read_order`, `mfm_frame_type_counts`, and `mfm_frame_table`. `mfm_exo2_frame_delta_ts_read_order` follows the ADNE `TimeStampDiffTExogam2` logic: current EXO2 frame TS minus previous EXO2 frame TS.
+默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的按 TS 排序 `delta_ts` 图、`mfm_frame_type_counts`，以及 `mfm_frame_table`。为兼容旧文件名，`mfm_all_frame_delta_ts_read_order` 和 `mfm_exo2_frame_delta_ts_read_order` 仍会写出，但内容已经改为“先对 TS 排序，再相邻相减”，因此所有间隔为正。
+The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, TS-sorted `delta_ts` histograms, `mfm_frame_type_counts`, and `mfm_frame_table`. For backward-compatible object names, `mfm_all_frame_delta_ts_read_order` and `mfm_exo2_frame_delta_ts_read_order` are still written, but their content is now computed after sorting TS first, so all intervals are positive.
+
+每个 EXO2 crystal 的图放在 `exo2_crystal_ts/` 目录下，按原始 `board id - trigger/crystal channel id` 分组，包含 `mfm_exo2_boardXXX_crystalYY_ts_distribution` 和 `mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`。
+Per-crystal EXO2 plots are stored in `exo2_crystal_ts/`, grouped by raw `board id - trigger/crystal channel id`, with `mfm_exo2_boardXXX_crystalYY_ts_distribution` and `mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`.
 
 ## RawTree EXO Gamma Timing Spectrum / RawTree EXO Gamma 时间谱分析
 

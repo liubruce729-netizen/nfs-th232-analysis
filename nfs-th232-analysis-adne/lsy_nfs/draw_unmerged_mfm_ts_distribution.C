@@ -24,6 +24,10 @@
 //   - If a top-level frame is a merge frame, inner frames are unfolded in the same
 //     way as ADNE's GUser::CaptureRawFrame() recursion.
 //     如果顶层 frame 是 merge frame，则按 ADNE 的 GUser::CaptureRawFrame() 思路递归展开内部 frame。
+//   - Delta-TS histograms sort TS before differencing, so all intervals are positive.
+//     所有 Delta-TS 图都会先对 TS 排序再相邻相减，因此间隔全为正值。
+//   - Per-crystal EXO2 plots are grouped by raw NUMEXO board id and trigger/crystal channel id.
+//     每个 crystal 的 EXO2 图按原始 NUMEXO board id 和 trigger/crystal channel id 分组。
 
 R__ADD_INCLUDE_PATH($MFMSYS/include)
 R__LOAD_LIBRARY($MFMSYS/lib/libMFM.so)
@@ -34,6 +38,7 @@ R__LOAD_LIBRARY($MFMSYS/lib/libMFM.so)
 #include <MFMTypes.h>
 
 #include <TCanvas.h>
+#include <TDirectory.h>
 #include <TFile.h>
 #include <TH1D.h>
 #include <TH1I.h>
@@ -113,6 +118,33 @@ const char *FrameTypeName(UShort_t frameType)
     case MFM_VAMOSIC_FRAME_TYPE: return "VAMOSIC";
     default: return "OTHER";
   }
+}
+
+// 用 board id 和 trigger/crystal channel id 组成一个稳定 key。
+// 这里不使用 ADNE LUT，因此该编号是原始 MFM/NUMEXO 层面的 crystal 标识。
+Int_t CrystalKey(Int_t boardId, Int_t channelId)
+{
+  return boardId * 1000 + channelId;
+}
+
+Int_t CrystalBoardFromKey(Int_t key)
+{
+  return key / 1000;
+}
+
+Int_t CrystalChannelFromKey(Int_t key)
+{
+  return key % 1000;
+}
+
+TString CrystalTag(Int_t key)
+{
+  return TString::Format("board%03d_crystal%02d", CrystalBoardFromKey(key), CrystalChannelFromKey(key));
+}
+
+TString CrystalLabel(Int_t key)
+{
+  return TString::Format("board %d crystal %d", CrystalBoardFromKey(key), CrystalChannelFromKey(key));
 }
 
 // 选择时间零点：优先使用顶层 event 的第一个非零 TS；如果顶层 TS 都为 0，
@@ -241,22 +273,26 @@ TH1D *MakeSignedValueHistogram(const std::vector<Double_t> &values,
   return hist;
 }
 
-// 按“读取顺序”计算相邻 frame 的 TS 差分。
-// 这对应 ADNE 里 TimeStampDiffTExogam2 的逻辑：当前 EXO2 frame TS - 上一个 EXO2 frame TS。
-// 与 MakeDeltaHistogram 不同，这里不排序，保留文件/解包顺序。
-TH1D *MakeReadOrderDeltaHistogram(const std::vector<ULong64_t> &ticks,
-                                  const char *name,
-                                  const char *title,
-                                  Double_t tsTickNs,
-                                  Double_t requestedBinWidthNs)
+// 先对原始 TS tick 排序，再计算相邻 frame 的 TS 差分。
+// 这样得到的间隔全部为正，适合检查束流周期或 frame 间隔分布。
+TH1D *MakeSortedTickDeltaHistogram(const std::vector<ULong64_t> &ticks,
+                                   const char *name,
+                                   const char *title,
+                                   Double_t tsTickNs,
+                                   Double_t requestedBinWidthNs)
 {
+  std::vector<ULong64_t> sortedTicks;
+  sortedTicks.reserve(ticks.size());
+  for (ULong64_t tick : ticks) {
+    if (tick > 0) sortedTicks.push_back(tick);
+  }
+  std::sort(sortedTicks.begin(), sortedTicks.end());
+
   std::vector<Double_t> deltas;
-  if (ticks.size() >= 2) {
-    deltas.reserve(ticks.size() - 1);
-    for (std::size_t i = 1; i < ticks.size(); ++i) {
-      const Long64_t current = static_cast<Long64_t>(ticks[i]);
-      const Long64_t previous = static_cast<Long64_t>(ticks[i - 1]);
-      deltas.push_back(static_cast<Double_t>(current - previous) * tsTickNs);
+  if (sortedTicks.size() >= 2) {
+    deltas.reserve(sortedTicks.size() - 1);
+    for (std::size_t i = 1; i < sortedTicks.size(); ++i) {
+      deltas.push_back(static_cast<Double_t>(sortedTicks[i] - sortedTicks[i - 1]) * tsTickNs);
     }
   }
   return MakeSignedValueHistogram(deltas, name, title, requestedBinWidthNs);
@@ -282,6 +318,7 @@ void CollectFrame(MFMCommonFrame *frame,
                   bool unfoldMerge,
                   std::vector<ULong64_t> &allFrameTs,
                   std::vector<ULong64_t> &exo2FrameTs,
+                  std::map<Int_t, std::vector<ULong64_t>> &exo2CrystalTs,
                   std::vector<FrameRow> &rows,
                   std::map<UShort_t, Long64_t> &typeCounts,
                   std::map<UShort_t, Long64_t> &zeroTsCounts)
@@ -296,7 +333,22 @@ void CollectFrame(MFMCommonFrame *frame,
   typeCounts[frameType]++;
   if (ts == 0) zeroTsCounts[frameType]++;
   if (ts > 0) allFrameTs.push_back(ts);
-  if (frameType == MFM_EXO2_FRAME_TYPE && ts > 0) exo2FrameTs.push_back(ts);
+
+  Int_t parsedBoardId = frame->GetBoardId();
+  Int_t parsedChannelId = frame->GetChannelId();
+  if (frameType == MFM_EXO2_FRAME_TYPE) {
+    // EXO2 frame 的 CristalId 字段同时包含 NUMEXO board id 和 trigger/crystal channel id。
+    // ADNE 后续会用 LUT 把它映射到 clover/crystal；这里保持原始 board-channel 分组。
+    MFMExogamFrame exoFrame;
+    exoFrame.SetAttributs(frame->GetPointHeader());
+    parsedBoardId = exoFrame.ExoGetBoardId();
+    parsedChannelId = exoFrame.ExoGetTGCristalId();
+
+    if (ts > 0) {
+      exo2FrameTs.push_back(ts);
+      exo2CrystalTs[CrystalKey(parsedBoardId, parsedChannelId)].push_back(ts);
+    }
+  }
 
   Int_t nbItems = -1;
   if (IsMergeFrame(frameType)) {
@@ -318,8 +370,8 @@ void CollectFrame(MFMCommonFrame *frame,
     row.frameSize = frame->GetFrameSize();
     row.headerSize = frame->GetHeaderSize();
     row.nbItems = nbItems;
-    row.boardId = frame->GetBoardId();
-    row.channelId = frame->GetChannelId();
+    row.boardId = parsedBoardId;
+    row.channelId = parsedChannelId;
     rows.push_back(row);
   }
 
@@ -333,7 +385,7 @@ void CollectFrame(MFMCommonFrame *frame,
     MFMCommonFrame innerFrame;
     mergeFrame.ReadInFrame(&innerFrame);
     CollectFrame(&innerFrame, topEventIndex, selectedEventIndex, depth + 1, i,
-                 unfoldMerge, allFrameTs, exo2FrameTs, rows, typeCounts, zeroTsCounts);
+                 unfoldMerge, allFrameTs, exo2FrameTs, exo2CrystalTs, rows, typeCounts, zeroTsCounts);
   }
 }
 
@@ -377,6 +429,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   std::vector<ULong64_t> topEventTs;
   std::vector<ULong64_t> allFrameTs;
   std::vector<ULong64_t> exo2FrameTs;
+  std::map<Int_t, std::vector<ULong64_t>> exo2CrystalTs;
   std::vector<FrameRow> frameRows;
   std::map<UShort_t, Long64_t> typeCounts;
   std::map<UShort_t, Long64_t> zeroTsCounts;
@@ -400,7 +453,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
       const ULong64_t topTs = topFrame.GetTimeStamp();
       if (topTs > 0) topEventTs.push_back(topTs);
       CollectFrame(&topFrame, topEventIndex, selectedEvents, 0, 0, unfoldMerge,
-                   allFrameTs, exo2FrameTs, frameRows, typeCounts, zeroTsCounts);
+                   allFrameTs, exo2FrameTs, exo2CrystalTs, frameRows, typeCounts, zeroTsCounts);
       selectedEvents++;
     }
     topEventIndex++;
@@ -465,17 +518,17 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                     "mfm_exo2_frame_delta_ts",
                                     "Delta TS between consecutive EXO2 frames;#DeltaT sorted by TS (ns);Pairs / bin",
                                     binWidthNs);
-  // 10. 按读取顺序的相邻 frame 间隔分布。
-  // 这更接近 ADNE 在线谱 TimeStampDiffTExogam2：不排序，直接 current TS - previous TS。
-  TH1D *hAllReadOrderDt = MakeReadOrderDeltaHistogram(
+  // 10. 从原始 tick 直接排序后计算相邻 frame 间隔，确保所有差分为正。
+  // 为兼容旧输出对象名，这里仍保留 *_read_order 名称，但内容已经改为 sorted TS delta。
+  TH1D *hAllReadOrderDt = MakeSortedTickDeltaHistogram(
       allFrameTs,
       "mfm_all_frame_delta_ts_read_order",
-      "ADNE-like Delta TS between consecutive frames in read order;#DeltaT in read order (ns);Pairs / bin",
+      "Sorted Delta TS between consecutive frames;#DeltaT after TS sorting (ns);Pairs / bin",
       tsTickNs, binWidthNs);
-  TH1D *hExoReadOrderDt = MakeReadOrderDeltaHistogram(
+  TH1D *hExoReadOrderDt = MakeSortedTickDeltaHistogram(
       exo2FrameTs,
       "mfm_exo2_frame_delta_ts_read_order",
-      "ADNE-like Delta TS between consecutive EXO2 frames in read order;#DeltaT in read order (ns);Pairs / bin",
+      "Sorted Delta TS between consecutive EXO2 frames;#DeltaT after TS sorting (ns);Pairs / bin",
       tsTickNs, binWidthNs);
 
   hTop->Write();
@@ -508,7 +561,49 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   hType.Write();
   hZero.Write();
 
-  // 12. 写出 frame table。
+  // 12. 每个 EXO2 crystal 的 TS 分布和相邻 TS 间隔分布。
+  // 这些图按原始 board-channel 分组，方便在不加载 ADNE LUT 的情况下定位某个 crystal 的异常计数率或时间间隔。
+  TDirectory *crystalDir = out.mkdir("exo2_crystal_ts");
+  if (crystalDir) {
+    crystalDir->cd();
+    TH1D hCrystalCounts("mfm_exo2_crystal_frame_counts",
+                        "EXO2 crystal frame counts;Raw EXO2 crystal;Frames",
+                        std::max<Int_t>(1, static_cast<Int_t>(exo2CrystalTs.size())),
+                        0.5, std::max<Double_t>(1.5, static_cast<Double_t>(exo2CrystalTs.size()) + 0.5));
+
+    Int_t bin = 1;
+    for (const auto &kv : exo2CrystalTs) {
+      const Int_t key = kv.first;
+      const TString tag = CrystalTag(key);
+      const TString label = CrystalLabel(key);
+      hCrystalCounts.GetXaxis()->SetBinLabel(bin, label.Data());
+      hCrystalCounts.SetBinContent(bin, static_cast<Double_t>(kv.second.size()));
+      bin++;
+
+      std::vector<Double_t> crystalTimesNs = RelativeTimesNs(kv.second, baseTs, tsTickNs);
+      TH1D *hCrystalTs = MakeTimeHistogram(
+          crystalTimesNs,
+          TString::Format("mfm_exo2_%s_ts_distribution", tag.Data()),
+          TString::Format("EXO2 %s TS distribution;Time from first selected TS (ns);Frames / bin", label.Data()),
+          binWidthNs);
+      TH1D *hCrystalDelta = MakeSortedTickDeltaHistogram(
+          kv.second,
+          TString::Format("mfm_exo2_%s_delta_ts_sorted", tag.Data()),
+          TString::Format("EXO2 %s sorted Delta TS;#DeltaT after TS sorting (ns);Pairs / bin", label.Data()),
+          tsTickNs, binWidthNs);
+
+      hCrystalTs->Write();
+      hCrystalDelta->Write();
+      SaveCanvas(hCrystalTs);
+      SaveCanvas(hCrystalDelta);
+    }
+    hCrystalCounts.SetEntries(exo2FrameTs.size());
+    hCrystalCounts.Write();
+    SaveCanvas(&hCrystalCounts);
+    out.cd();
+  }
+
+  // 13. 写出 frame table。
   // 它不是后续大规模分析的主数据，而是用来抽查原始 MFM 结构和定位坏 frame。
   TTree frameTable("mfm_frame_table", "Unmerged MFM frame table");
   FrameRow row;
@@ -532,7 +627,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   }
   frameTable.Write();
 
-  // 13. 保存 canvas，方便用 TBrowser 或 ROOT GUI 直接查看。
+  // 14. 保存 canvas，方便用 TBrowser 或 ROOT GUI 直接查看。
   SaveCanvas(hTop);
   SaveCanvas(hAll);
   SaveCanvas(hExo);
@@ -544,7 +639,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
 
   out.Close();
 
-  // 14. 终端打印简要统计，便于批处理日志中快速检查。
+  // 15. 终端打印简要统计，便于批处理日志中快速检查。
   std::cout << "Input: " << inputMfmFile << std::endl;
   std::cout << "Start top event: " << startEvent << std::endl;
   std::cout << "Selected top events: " << selectedEvents << std::endl;
@@ -553,6 +648,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   std::cout << "Top TS entries: " << topTimesNs.size() << std::endl;
   std::cout << "All frame TS entries: " << allFrameTimesNs.size() << std::endl;
   std::cout << "EXO2 frame TS entries: " << exo2FrameTimesNs.size() << std::endl;
+  std::cout << "EXO2 crystal groups: " << exo2CrystalTs.size() << std::endl;
   std::cout << "Saved frame-table rows: " << frameRows.size() << std::endl;
   std::cout << "Output: " << outName << std::endl;
 }
