@@ -228,6 +228,46 @@ The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts
 每个 EXO2 crystal 的图放在 `exo2_crystal_ts/` 目录下，严格按原始 `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())` 分组，包含 `mfm_exo2_boardXXX_crystalYY_ts_distribution`、`mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`、`mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`，以及列出每个分组条目的 `mfm_exo2_crystal_summary`。
 Per-crystal EXO2 plots are stored in `exo2_crystal_ts/`, grouped strictly by raw `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())`, with `mfm_exo2_boardXXX_crystalYY_ts_distribution`, `mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`, `mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`, and a `mfm_exo2_crystal_summary` table listing each group.
 
+## Period Folding Scan / 周期折叠扫描
+
+`scan_fold_period.C` 对一个已有 ROOT 一维直方图做周期扫描。每个候选周期都会把原图横轴按 `phase = (time - t0) mod period` 折叠，写出一张一维 folded 图；同时把所有周期的 folded 结果汇总成二维图，方便直接看周期变化。
+`scan_fold_period.C` scans trial periods for an existing ROOT TH1. For each trial period, it folds the x-axis with `phase = (time - t0) mod period`, writes one folded TH1, and combines all folded results into 2D maps so period-dependent structure is visible.
+
+```bash
+cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
+source /home/user0/work/IJCLAB/NFS/NFS_env.sh
+
+root -l -b -q 'lsy_nfs/scan_fold_period.C("out/mfm_ts_diff.root","mfm_exo2_frame_ts_distribution",1000,2000,1,10,"out/period_scan_exo2.root")'
+
+root -l -b -q 'lsy_nfs/scan_fold_period.C("out/mfm_ts_diff.root","exo2_crystal_ts/mfm_exo2_board111_crystal00_ts_distribution",1000,2000,1,10,"out/period_scan_board111_c00.root")'
+```
+
+参数顺序：
+Arguments:
+
+```text
+inputRoot, histName, periodMinNs, periodMaxNs, periodStepNs, phaseBinNs, outputRoot, t0Ns, writeFolded1D
+```
+
+其中 `phaseBinNs` 只是 folded 图的相位 bin 宽，不参与周期判断；周期判断来自每个候选 `periodNs` 下对已有直方图的折叠结果。
+`phaseBinNs` is only the phase-bin width of the folded histograms; it is not a physics cut. The scan is driven by folding the existing histogram at each trial `periodNs`.
+
+主要输出对象：
+Main output objects:
+
+```text
+period_fold_map_raw       # x = phase, y = trial period, z = raw counts
+period_fold_map_norm      # same map, each period row divided by its row mean
+period_scan_chi2_over_n   # folded spectrum non-flatness score
+period_scan_peak_over_mean
+period_scan_rms_over_mean
+best_folded_hist
+folded_1d/                # one folded TH1D for every trial period
+```
+
+通常先看 `period_fold_map_norm`；如果某个周期附近出现稳定、清楚的竖向结构，再看 `period_scan_chi2_over_n` 和 `best_folded_hist`。
+Usually inspect `period_fold_map_norm` first. If a stable vertical structure appears near a trial period, then check `period_scan_chi2_over_n` and `best_folded_hist`.
+
 ## RawTree EXO Gamma Timing Spectrum / RawTree EXO Gamma 时间谱分析
 
 `analyze_raw_exo_gamma_timing_spectrum.C` 用于在不知道束流周期时，从 RawTree 中的 EXO2 gamma frame 搜索周期成分。
