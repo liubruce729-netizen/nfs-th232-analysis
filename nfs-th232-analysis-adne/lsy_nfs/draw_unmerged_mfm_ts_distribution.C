@@ -71,6 +71,11 @@ constexpr Long64_t kMaxHistogramBins = 1000000;
 // frame table 主要用于抽查前面一段数据结构，不建议把超大文件所有 frame 都写入表中。
 constexpr Long64_t kMaxSavedFrameRows = 500000;
 
+// NFS 现有在线分析使用的 EXO2 TDC 粗转换：DeltaT 是 16 bit，翻转后每道约 0.024 ns。
+// 这里保持和 ADNE 当前 NFS 快速分析一致；真正精细刻度要再读每个 crystal 的 time calibration。
+constexpr Double_t kNfsDefaultTdcGainNs = 0.024;
+constexpr Double_t kNfsTdcChannels = 65536.0;
+
 // 保存到 mfm_frame_table 的单个 frame 信息。
 // 这里的 frame 包括顶层 frame，也包括 merge frame 内部递归展开得到的子 frame。
 struct FrameRow {
@@ -88,6 +93,9 @@ struct FrameRow {
   Int_t nbItems = -1;               // 如果是 merge frame，这里记录其内部 item/frame 数；否则为 -1。
   Int_t boardId = -1;               // MFMlib 可解析出的 board id；无法解析时为 -1。
   Int_t channelId = -1;             // MFMlib 可解析出的 channel id；无法解析时为 -1。
+  Int_t exoDeltaT = -1;             // EXO2 frame 内部的原始 DeltaT/TDC；非 EXO2 frame 为 -1。
+  Double_t exoReversedDeltaTNs = -1.0; // (65536-DeltaT)*0.024 ns，ADNE NFS 的基础 TDC 时间。
+  Double_t exoTsPhaseMinusTdcNs = -999999.0; // TS 相位减去 reversed DeltaT 的循环差。
 };
 
 // 根据输入 MFM 文件名生成默认输出 ROOT 文件名。
@@ -150,6 +158,34 @@ TString CrystalTag(Int_t key)
 TString CrystalLabel(Int_t key)
 {
   return TString::Format("board %d crystal %d", CrystalBoardFromKey(key), CrystalChannelFromKey(key));
+}
+
+
+// 把 EXO2 frame 内部的原始 DeltaT/TDC 翻转并转换为 ns。
+// 该定义和 ADNE 当前 NFS 快速分析一致：reversedDeltaT = (65536 - rawDeltaT) * 0.024 ns。
+Double_t ReversedDeltaTNs(UShort_t rawDeltaT)
+{
+  return (kNfsTdcChannels - static_cast<Double_t>(rawDeltaT)) * kNfsDefaultTdcGainNs;
+}
+
+// 比较同一个 EXO2 frame 中的绝对 TS 和 TDC：
+// 1. TS 是巨大的绝对 tick，先乘 tsTickNs 变为 ns；
+// 2. TDC 只覆盖一个 16-bit 周期，即 65536*0.024 ns；
+// 3. 因此先把 TS 按 TDC 周期折叠成相位；
+// 4. 再减去 reversed DeltaT，并折回 [-period/2, period/2]。
+// 这个量只用于诊断 TS 和 TDC 的相位关系，不能当作真实物理 TOF。
+Double_t TsPhaseMinusTdcNs(ULong64_t timeStamp, UShort_t rawDeltaT, Double_t tsTickNs)
+{
+  if (timeStamp == 0 || tsTickNs <= 0.0) return -999999.0;
+  const Double_t tdcPeriodNs = kNfsTdcChannels * kNfsDefaultTdcGainNs;
+  const Double_t reversedDeltaT = ReversedDeltaTNs(rawDeltaT);
+  const long double tsNs = static_cast<long double>(timeStamp) * static_cast<long double>(tsTickNs);
+  Double_t tsPhaseNs = static_cast<Double_t>(std::fmod(tsNs, static_cast<long double>(tdcPeriodNs)));
+  if (tsPhaseNs < 0.0) tsPhaseNs += tdcPeriodNs;
+  Double_t diffNs = tsPhaseNs - reversedDeltaT;
+  while (diffNs > 0.5 * tdcPeriodNs) diffNs -= tdcPeriodNs;
+  while (diffNs < -0.5 * tdcPeriodNs) diffNs += tdcPeriodNs;
+  return diffNs;
 }
 
 // 选择时间零点：优先使用顶层 event 的第一个非零 TS；如果顶层 TS 都为 0，
@@ -345,9 +381,12 @@ void CollectFrame(MFMCommonFrame *frame,
                   Int_t depth,
                   Int_t indexInParent,
                   bool unfoldMerge,
+                  Double_t tsTickNs,
                   std::vector<ULong64_t> &allFrameTs,
                   std::vector<ULong64_t> &exo2FrameTs,
                   std::map<Int_t, std::vector<ULong64_t>> &exo2CrystalTs,
+                  std::vector<Double_t> &exo2TsMinusTdcNs,
+                  std::map<Int_t, std::vector<Double_t>> &exo2CrystalTsMinusTdcNs,
                   std::vector<FrameRow> &rows,
                   std::map<UShort_t, Long64_t> &typeCounts,
                   std::map<UShort_t, Long64_t> &zeroTsCounts)
@@ -365,6 +404,9 @@ void CollectFrame(MFMCommonFrame *frame,
 
   Int_t parsedBoardId = frame->GetBoardId();
   Int_t parsedChannelId = frame->GetChannelId();
+  Int_t parsedExoDeltaT = -1;
+  Double_t parsedExoReversedDeltaTNs = -1.0;
+  Double_t parsedExoTsPhaseMinusTdcNs = -999999.0;
   if (frameType == MFM_EXO2_FRAME_TYPE) {
     // EXO2 CristalId 是 16 bit 复合字段：高位保存 NUMEXO board id，低 5 bit 保存 crystal/channel id。
     // 这里严格按 (ExoGetBoardId, ExoGetTGCristalId) 分组，不使用 ADNE LUT。
@@ -372,10 +414,16 @@ void CollectFrame(MFMCommonFrame *frame,
     exoFrame.SetAttributs(frame->GetPointHeader());
     parsedBoardId = exoFrame.ExoGetBoardId();
     parsedChannelId = exoFrame.ExoGetTGCristalId();
+    parsedExoDeltaT = exoFrame.ExoGetDeltaT();
+    parsedExoReversedDeltaTNs = ReversedDeltaTNs(static_cast<UShort_t>(parsedExoDeltaT));
+    parsedExoTsPhaseMinusTdcNs = TsPhaseMinusTdcNs(ts, static_cast<UShort_t>(parsedExoDeltaT), tsTickNs);
 
     if (ts > 0) {
+      const Int_t crystalKey = CrystalKey(parsedBoardId, parsedChannelId);
       exo2FrameTs.push_back(ts);
-      exo2CrystalTs[CrystalKey(parsedBoardId, parsedChannelId)].push_back(ts);
+      exo2CrystalTs[crystalKey].push_back(ts);
+      exo2TsMinusTdcNs.push_back(parsedExoTsPhaseMinusTdcNs);
+      exo2CrystalTsMinusTdcNs[crystalKey].push_back(parsedExoTsPhaseMinusTdcNs);
     }
   }
 
@@ -401,6 +449,9 @@ void CollectFrame(MFMCommonFrame *frame,
     row.nbItems = nbItems;
     row.boardId = parsedBoardId;
     row.channelId = parsedChannelId;
+    row.exoDeltaT = parsedExoDeltaT;
+    row.exoReversedDeltaTNs = parsedExoReversedDeltaTNs;
+    row.exoTsPhaseMinusTdcNs = parsedExoTsPhaseMinusTdcNs;
     rows.push_back(row);
   }
 
@@ -414,7 +465,8 @@ void CollectFrame(MFMCommonFrame *frame,
     MFMCommonFrame innerFrame;
     mergeFrame.ReadInFrame(&innerFrame);
     CollectFrame(&innerFrame, topEventIndex, selectedEventIndex, depth + 1, i,
-                 unfoldMerge, allFrameTs, exo2FrameTs, exo2CrystalTs, rows, typeCounts, zeroTsCounts);
+                 unfoldMerge, tsTickNs, allFrameTs, exo2FrameTs, exo2CrystalTs,
+                 exo2TsMinusTdcNs, exo2CrystalTsMinusTdcNs, rows, typeCounts, zeroTsCounts);
   }
 }
 
@@ -459,6 +511,8 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   std::vector<ULong64_t> allFrameTs;
   std::vector<ULong64_t> exo2FrameTs;
   std::map<Int_t, std::vector<ULong64_t>> exo2CrystalTs;
+  std::vector<Double_t> exo2TsMinusTdcNs;
+  std::map<Int_t, std::vector<Double_t>> exo2CrystalTsMinusTdcNs;
   std::vector<FrameRow> frameRows;
   std::map<UShort_t, Long64_t> typeCounts;
   std::map<UShort_t, Long64_t> zeroTsCounts;
@@ -481,8 +535,9 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
       topFrame.SetAttributs();
       const ULong64_t topTs = topFrame.GetTimeStamp();
       if (topTs > 0) topEventTs.push_back(topTs);
-      CollectFrame(&topFrame, topEventIndex, selectedEvents, 0, 0, unfoldMerge,
-                   allFrameTs, exo2FrameTs, exo2CrystalTs, frameRows, typeCounts, zeroTsCounts);
+      CollectFrame(&topFrame, topEventIndex, selectedEvents, 0, 0, unfoldMerge, tsTickNs,
+                   allFrameTs, exo2FrameTs, exo2CrystalTs,
+                   exo2TsMinusTdcNs, exo2CrystalTsMinusTdcNs, frameRows, typeCounts, zeroTsCounts);
       selectedEvents++;
     }
     topEventIndex++;
@@ -565,6 +620,12 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
       "Read-order Delta TS between consecutive EXO2 frames;#DeltaT in read order (ns);Pairs / bin",
       tsTickNs, binWidthNs);
 
+  TH1D *hExoTsMinusTdc = MakeSignedValueHistogram(
+      exo2TsMinusTdcNs,
+      "mfm_exo2_ts_phase_minus_reversed_tdc",
+      "EXO2 TS phase minus reversed DeltaT;TS phase - reversed DeltaT (ns);EXO2 frames / bin",
+      1.0);
+
   hTop->Write();
   hAll->Write();
   hExo->Write();
@@ -574,6 +635,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   hTopReadOrderDt->Write();
   hAllReadOrderDt->Write();
   hExoReadOrderDt->Write();
+  hExoTsMinusTdc->Write();
 
   // 11. frame type 计数和 TS=0 的 frame type 计数。
   // 这可以快速检查文件里是否混有非 EXO2 frame、hello frame、merge frame 或异常 zero-TS frame。
@@ -658,13 +720,20 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
           TString::Format("mfm_exo2_%s_delta_ts_read_order", tag.Data()),
           TString::Format("EXO2 %s read-order Delta TS;#DeltaT in read order (ns);Pairs / bin", label.Data()),
           tsTickNs, binWidthNs);
+      TH1D *hCrystalTsMinusTdc = MakeSignedValueHistogram(
+          exo2CrystalTsMinusTdcNs[key],
+          TString::Format("mfm_exo2_%s_ts_phase_minus_reversed_tdc", tag.Data()),
+          TString::Format("EXO2 %s TS phase minus reversed DeltaT;TS phase - reversed DeltaT (ns);Frames / bin", label.Data()),
+          1.0);
 
       hCrystalTs->Write();
       hCrystalDelta->Write();
       hCrystalReadOrderDelta->Write();
+      hCrystalTsMinusTdc->Write();
       SaveCanvas(hCrystalTs);
       SaveCanvas(hCrystalDelta);
       SaveCanvas(hCrystalReadOrderDelta);
+      SaveCanvas(hCrystalTsMinusTdc);
     }
     hCrystalCounts.SetEntries(exo2FrameTs.size());
     hCrystalCounts.Write();
@@ -694,6 +763,9 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   frameTable.Branch("nb_items", &row.nbItems);
   frameTable.Branch("board_id", &row.boardId);
   frameTable.Branch("channel_id", &row.channelId);
+  frameTable.Branch("exo_delta_t", &row.exoDeltaT);
+  frameTable.Branch("exo_reversed_delta_t_ns", &row.exoReversedDeltaTNs);
+  frameTable.Branch("exo_ts_phase_minus_tdc_ns", &row.exoTsPhaseMinusTdcNs);
   for (const auto &saved : frameRows) {
     row = saved;
     frameTable.Fill();
@@ -710,6 +782,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   SaveCanvas(hTopReadOrderDt);
   SaveCanvas(hAllReadOrderDt);
   SaveCanvas(hExoReadOrderDt);
+  SaveCanvas(hExoTsMinusTdc);
 
   out.Close();
 
@@ -722,6 +795,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   std::cout << "Top TS entries: " << topTimesNs.size() << std::endl;
   std::cout << "All frame TS entries: " << allFrameTimesNs.size() << std::endl;
   std::cout << "EXO2 frame TS entries: " << exo2FrameTimesNs.size() << std::endl;
+  std::cout << "EXO2 TS phase minus TDC entries: " << exo2TsMinusTdcNs.size() << std::endl;
   std::cout << "EXO2 crystal groups: " << exo2CrystalTs.size() << std::endl;
   std::cout << "Saved frame-table rows: " << frameRows.size() << std::endl;
   std::cout << "Output: " << outName << std::endl;

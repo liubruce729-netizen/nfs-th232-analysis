@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdlib>
 #include <sstream>
 
@@ -22,6 +23,7 @@ TExogam2::TExogam2(bool bspec)
    NfsSpec=false;
    NfsCrystalTimeCorrection=false;
    PrevTS=0;
+   NfsPrevCrystalTimestamp=0;
    Theta_P=Phi_P=0;
    TARGET_POSITION_X=0. ; // mm
    TARGET_POSITION_Y=0. ; // mm
@@ -37,6 +39,8 @@ TExogam2::TExogam2(bool bspec)
    closed=false;
    fNfsCrystalDeltaTEnergy=NULL;
    fNfsAllCrystalTime=NULL;
+   fNfsAllCrystalTimestampDiff=NULL;
+   fNfsAllCrystalTsMinusTdc=NULL;
    fNfsCrystalCrossTalk=NULL;
    fNfsCrystalBgoEfficiency=NULL;
    fNfsCrystalCsiEfficiency=NULL;
@@ -337,6 +341,19 @@ bool TExogam2::NfsSpectraConstructor(){
 	fNfsAllCrystalTime = new TH1F("nfs_all_crystal_time","NFS all crystal Time;Time (ns);Counts",1600,0,1600);
 	HListNfsExogam2.Add(fNfsAllCrystalTime);
 
+	// EN: Read-order timestamp spacing of accepted EXO2 crystal frames, converted with 1 TS tick = 10 ns.
+	// CN: 已接受 EXO2 crystal frame 的读取顺序 timestamp 间隔；按 1 个 TS tick = 10 ns 转换。
+	fNfsAllCrystalTimestampDiff = new TH1F("nfs_all_crystal_ts_diff","NFS all crystal timestamp difference;#DeltaTS in read order (ns);Crystal-frame pairs",22000,-10000,100000);
+	HListNfsExogam2.Add(fNfsAllCrystalTimestampDiff);
+
+	// EN: Compare the absolute TS phase with the same-frame EXO2 TDC DeltaT after NFS reversal.
+	//     Directly subtracting a huge absolute TS from a 0-1573 ns TDC value is meaningless,
+	//     so TS is folded by the 65536-channel TDC period before the difference is filled.
+	// CN: 比较同一个 EXO2 frame 中的绝对 TS 相位和 TDC DeltaT 翻转时间。
+	//     巨大的绝对 TS 不能直接和 0-1573 ns 的 TDC 相减，因此先按 65536 道 TDC 周期折叠 TS。
+	fNfsAllCrystalTsMinusTdc = new TH1F("nfs_all_crystal_ts_phase_minus_tdc","NFS all crystal TS phase minus reversed TDC;TS phase - reversed DeltaT (ns);Crystal frames",1600,-800,800);
+	HListNfsExogam2.Add(fNfsAllCrystalTsMinusTdc);
+
 	// EN: Cross talk is event-level: if two or more crystals have positive gamma energy, fill all off-diagonal pairs.
 	// CN: 串扰图是 event 级定义：同一 event 中两个以上 crystal 有正 gamma 能量时，填所有非对角两两组合。
 	fNfsCrystalCrossTalk = new TH2F("nfs_crystal_cross_talk","NFS crystal cross talk;Crystal (clover-crystal);Crystal (clover-crystal)",64,-0.5,63.5,64,-0.5,63.5);
@@ -422,6 +439,47 @@ bool TExogam2::NfsSpectraConstructor(){
 	}
 
 	return true;
+}
+
+
+void TExogam2::FillNfsTimestampDiagnostics(ULong64_t timestamp, UShort_t rawDeltaT, Int_t mapFinger, Bool_t fillGlobalSpectra){
+	// EN: This helper fills NFS-only timestamp diagnostics for accepted EXO2 crystal frames.
+	//     It is intentionally separated from the energy/time spectra because it uses raw MFM timing fields.
+	// CN: 这个函数为已接受的 EXO2 crystal frame 填充 NFS 专用 timestamp 诊断谱。
+	//     它使用原始 MFM 时间字段，因此和能量/Time 谱分开处理。
+	if(!NfsSpec)return;
+	if(!fillGlobalSpectra)return;
+	if(mapFinger<0 || mapFinger>=16*4)return;
+	if(timestamp==0)return;
+
+	const Double_t tsTickNs=10.0;             // EN/CN: ADNE/NFS convention: one absolute TS tick is 10 ns.
+	const Double_t tdcGainNs=0.024;           // EN/CN: current NFS online TDC conversion gain, ns/channel.
+	const Double_t tdcPeriodNs=65536.0*tdcGainNs;
+
+	// EN: Consecutive EXO2 crystal-frame TS spacing in the original read/unpack order.
+	// CN: 按原始读取/解包顺序计算相邻 EXO2 crystal frame 的 TS 间隔。
+	if(NfsPrevCrystalTimestamp>0 && fNfsAllCrystalTimestampDiff){
+		Long64_t dtTicks=static_cast<Long64_t>(timestamp)-static_cast<Long64_t>(NfsPrevCrystalTimestamp);
+		fNfsAllCrystalTimestampDiff->Fill(static_cast<Double_t>(dtTicks)*tsTickNs);
+	}
+	NfsPrevCrystalTimestamp=timestamp;
+
+	// EN: EXO2 DeltaT is a 16-bit TDC value. For NFS timing we reverse it before converting to ns.
+	// CN: EXO2 DeltaT 是 16 bit TDC 值；NFS 时间分析中先翻转，再转换为 ns。
+	Double_t reversedDeltaTNs=(65536.0-static_cast<Double_t>(rawDeltaT))*tdcGainNs;
+
+	// EN: Fold absolute TS by one TDC period before comparison; use long double to keep precision for huge TS.
+	// CN: 比较前先把绝对 TS 按一个 TDC 周期折叠；用 long double 保持巨大 TS 的相位精度。
+	long double tsNs=static_cast<long double>(timestamp)*static_cast<long double>(tsTickNs);
+	Double_t tsPhaseNs=static_cast<Double_t>(std::fmod(tsNs, static_cast<long double>(tdcPeriodNs)));
+	if(tsPhaseNs<0)tsPhaseNs+=tdcPeriodNs;
+
+	// EN: Store the shortest circular difference in [-period/2, period/2].
+	// CN: 保存最短循环差，范围约为 [-周期/2, 周期/2]。
+	Double_t diffNs=tsPhaseNs-reversedDeltaTNs;
+	while(diffNs>0.5*tdcPeriodNs)diffNs-=tdcPeriodNs;
+	while(diffNs<-0.5*tdcPeriodNs)diffNs+=tdcPeriodNs;
+	if(fNfsAllCrystalTsMinusTdc)fNfsAllCrystalTsMinusTdc->Fill(diffNs);
 }
 
 void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t timeNs, Float_t energy, Float_t bgo, Float_t csi, Bool_t fillGlobalSpectra){
@@ -1208,6 +1266,9 @@ bool TExogam2::IsMFMExo(MFMExogamFrame *frame)
    	valf=Cal(frame->ExoGetInnerM(0),ECoef[MapFinger][0],ECoef[MapFinger][1],ECoef[MapFinger][2]); 
         
 	rawDeltaT=frame->ExoGetDeltaT();
+	// EN: NFS raw timing diagnostics are filled before DeltaT is calibrated or converted to neutron Time.
+	// CN: NFS 原始时间诊断在 DeltaT 刻度或转换成中子 Time 之前填充。
+	FillNfsTimestampDiagnostics(frame->GetTimeStamp(),rawDeltaT,MapFinger,IsNfsCrystalEnabled(clo,cri));
 	valf2=Cal(rawDeltaT,TCoef[MapFinger][0],TCoef[MapFinger][1],TCoef[MapFinger][2]);
 	Double_t reversedDeltaT=65536.0-static_cast<Double_t>(rawDeltaT);
 	Bool_t useNfsTimeCal=NfsCrystalTimeCorrection && MapFinger>=0 && MapFinger<16*4 && NfsCrystalTimeCorrectionValid[MapFinger];

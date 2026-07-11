@@ -570,6 +570,8 @@ void GUser::InitUser()
     // CN: NFS 快速谱，用于检查 gamma 响应随中子 Time 的变化。
     MySpectraList->AddSpectrum(fExogam2->fNfsCrystalDeltaTEnergy,"NFS/Crystal_Fire");
     MySpectraList->AddSpectrum(fExogam2->fNfsAllCrystalTime,"NFS/Crystal_Time");
+    MySpectraList->AddSpectrum(fExogam2->fNfsAllCrystalTimestampDiff,"NFS/Crystal_TS_Diagnostics");
+    MySpectraList->AddSpectrum(fExogam2->fNfsAllCrystalTsMinusTdc,"NFS/Crystal_TS_Diagnostics");
     for(int clo=0; clo<16; clo++){
       if(fExogam2->IsCloverActive(clo)==false)continue;
       MySpectraList->AddSpectrum(fExogam2->fNfsCloverAddbackGamma[clo],"NFS/Clover_Addback");

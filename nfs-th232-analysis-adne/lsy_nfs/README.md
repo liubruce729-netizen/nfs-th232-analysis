@@ -228,6 +228,38 @@ The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts
 每个 EXO2 crystal 的图放在 `exo2_crystal_ts/` 目录下，严格按原始 `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())` 分组，包含 `mfm_exo2_boardXXX_crystalYY_ts_distribution`、`mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`、`mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`，以及列出每个分组条目的 `mfm_exo2_crystal_summary`。
 Per-crystal EXO2 plots are stored in `exo2_crystal_ts/`, grouped strictly by raw `(board_id, crystal_id) = (ExoGetBoardId(), ExoGetTGCristalId())`, with `mfm_exo2_boardXXX_crystalYY_ts_distribution`, `mfm_exo2_boardXXX_crystalYY_delta_ts_sorted`, `mfm_exo2_boardXXX_crystalYY_delta_ts_read_order`, and a `mfm_exo2_crystal_summary` table listing each group.
 
+新增 TS-TDC 诊断图：`mfm_exo2_ts_phase_minus_reversed_tdc` 和 `exo2_crystal_ts/mfm_exo2_boardXXX_crystalYY_ts_phase_minus_reversed_tdc`。这里的 TDC 使用 EXO2 `DeltaT`，按 `(65536-DeltaT)*0.024 ns` 翻转；绝对 TS 先按 `65536*0.024 ns` 的 TDC 周期折叠，再和 TDC 相减。`mfm_frame_table` 同时写出 `exo_delta_t`、`exo_reversed_delta_t_ns` 和 `exo_ts_phase_minus_tdc_ns`。
+New TS-TDC diagnostic plots are `mfm_exo2_ts_phase_minus_reversed_tdc` and `exo2_crystal_ts/mfm_exo2_boardXXX_crystalYY_ts_phase_minus_reversed_tdc`. TDC means EXO2 `DeltaT`, reversed as `(65536-DeltaT)*0.024 ns`; the absolute TS is folded by the `65536*0.024 ns` TDC period before subtraction. `mfm_frame_table` also stores `exo_delta_t`, `exo_reversed_delta_t_ns`, and `exo_ts_phase_minus_tdc_ns`.
+
+## MFM Binary To Raw ROOT Tree / MFM 二进制转 Raw ROOT Tree
+
+`mfm_to_raw_root_tree.C` 只使用 ROOT + MFMlib，直接遍历 MFM binary，把文件中直接读到的 top frame 和可选递归展开的 merge 子 frame 写入 ROOT tree。它不调用 ADNE 的 lookup table、能量刻度、NFS time correction、addback 或 mult 判选。详细结构说明见 `MFM_raw_merged_structure_CN.md`。
+`mfm_to_raw_root_tree.C` uses only ROOT + MFMlib to scan MFM binary files and write top-level frames plus optionally unfolded merge children into ROOT trees. It does not apply ADNE lookup tables, energy calibration, NFS time correction, addback, or multiplicity selection. See `MFM_raw_merged_structure_CN.md` for detailed structure notes.
+
+```bash
+cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
+source /home/user0/work/IJCLAB/NFS/NFS_env.sh
+
+# Read 2000 top frames, unfold merge frames, print the first 10 top events.
+# 读取 2000 个顶层 frame，展开 merge frame，并打印前 10 个 top event。
+root -l -b -q 'lsy_nfs/mfm_to_raw_root_tree.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",2000,"out/mfm_raw_tree.root")'
+
+# Full debug interface: input, maxTopEvents, output, unfoldMerge, maxPrintTopEvents, tsTickNs, maxStoredTopBytes.
+# 完整调试接口：输入、顶层 frame 数、输出、是否展开 merge、打印 event 数、TS tick、保存 top frame 原始字节数。
+root -l -b -q 'lsy_nfs/mfm_to_raw_root_tree.C("data/file.dat",100,"out/check.root",true,20,10.0,64)'
+```
+
+输出包含 `MfmTopTree` 和 `MfmFrameTree`。快速查看：
+The output contains `MfmTopTree` and `MfmFrameTree`. Quick checks:
+
+```cpp
+MfmTopTree->Scan("selected_top_index:file_offset:frame_type_name:frame_size:timestamp:nb_items", "", "", 30)
+MfmFrameTree->Scan("selected_top_index:depth:index_in_parent:frame_type_name:timestamp:exo_board_id:exo_tg_crystal_id:exo_delta_t:exo_inner6m", "", "", 50)
+MfmFrameTree->Draw("frame_type")
+MfmFrameTree->Draw("exo_delta_t", "is_exo2")
+MfmFrameTree->Draw("exo_ts_phase_minus_tdc_ns", "is_exo2")
+```
+
 ## Period Folding Scan / 周期折叠扫描
 
 `scan_fold_period.C` 对一个已有 ROOT 一维直方图做周期扫描。每个候选周期都会把原图横轴按 `phase = (time - t0) mod period` 折叠，写出一张一维 folded 图；同时把所有周期的 folded 结果汇总成二维图，方便直接看周期变化。
