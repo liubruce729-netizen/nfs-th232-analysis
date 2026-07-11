@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -149,10 +150,22 @@ void draw_raw_timestamp_axis(const char *inputFile,
   }
 
   ULong64_t rawTopTimestamp = 0;
+  ULong64_t rawEventIndex = 0;
+  Int_t rawTopFrameType = -1;
+  Int_t rawTopNbItems = -1;
   std::vector<ULong64_t> *rawFrameTimestamp = nullptr;
   std::vector<Int_t> *rawFrameType = nullptr;
 
   tree->SetBranchAddress("raw_top_timestamp", &rawTopTimestamp);
+  if (HasBranch(tree, "raw_event_index")) {
+    tree->SetBranchAddress("raw_event_index", &rawEventIndex);
+  }
+  if (HasBranch(tree, "raw_top_frame_type")) {
+    tree->SetBranchAddress("raw_top_frame_type", &rawTopFrameType);
+  }
+  if (HasBranch(tree, "raw_top_nb_items")) {
+    tree->SetBranchAddress("raw_top_nb_items", &rawTopNbItems);
+  }
 
   const bool hasFrameTimestamp = HasBranch(tree, "raw_frame_timestamp");
   const bool hasFrameType = HasBranch(tree, "raw_frame_type");
@@ -177,9 +190,45 @@ void draw_raw_timestamp_axis(const char *inputFile,
   std::vector<double> frameExo2TimesNs;
 
   ULong64_t firstTopTS = 0;
+  ULong64_t lastTopTS = 0;
+  ULong64_t previousTopTS = 0;
   Long64_t eventsRead = 0;
   Long64_t eventsWithNonZeroTS = 0;
   double maxTimeNs = 0.0;
+  ULong64_t minPositiveEventDeltaTicks = std::numeric_limits<ULong64_t>::max();
+  ULong64_t maxEventDeltaTicks = 0;
+
+  // EN: Diagnostic tree stores the first raw timestamps exactly as read.
+  // CN: 诊断 tree 原样保存前若干个 raw timestamp，方便确认是否真的读到了变化的 TS。
+  TTree *debugTree = new TTree("raw_timestamp_axis_debug",
+                               "First raw timestamps used by draw_raw_timestamp_axis");
+  debugTree->SetDirectory(nullptr);
+  Long64_t debugEntry = 0;
+  ULong64_t debugRawEventIndex = 0;
+  Int_t debugTopFrameType = -1;
+  Int_t debugTopNbItems = -1;
+  ULong64_t debugTopTimestamp = 0;
+  Long64_t debugDeltaFromFirstTicks = 0;
+  Long64_t debugDeltaFromPreviousTicks = 0;
+  double debugDeltaFromFirstNs = 0.0;
+  double debugDeltaFromPreviousNs = 0.0;
+  Int_t debugNFrames = 0;
+  Int_t debugFirstFrameType = -1;
+  Long64_t debugFirstFrameDeltaTicks = 0;
+  Int_t debugExo2FrameCount = 0;
+  debugTree->Branch("entry", &debugEntry, "entry/L");
+  debugTree->Branch("raw_event_index", &debugRawEventIndex, "raw_event_index/l");
+  debugTree->Branch("raw_top_frame_type", &debugTopFrameType, "raw_top_frame_type/I");
+  debugTree->Branch("raw_top_nb_items", &debugTopNbItems, "raw_top_nb_items/I");
+  debugTree->Branch("raw_top_timestamp", &debugTopTimestamp, "raw_top_timestamp/l");
+  debugTree->Branch("delta_from_first_ticks", &debugDeltaFromFirstTicks, "delta_from_first_ticks/L");
+  debugTree->Branch("delta_from_previous_ticks", &debugDeltaFromPreviousTicks, "delta_from_previous_ticks/L");
+  debugTree->Branch("delta_from_first_ns", &debugDeltaFromFirstNs, "delta_from_first_ns/D");
+  debugTree->Branch("delta_from_previous_ns", &debugDeltaFromPreviousNs, "delta_from_previous_ns/D");
+  debugTree->Branch("raw_frame_count", &debugNFrames, "raw_frame_count/I");
+  debugTree->Branch("first_frame_type", &debugFirstFrameType, "first_frame_type/I");
+  debugTree->Branch("first_frame_delta_ticks", &debugFirstFrameDeltaTicks, "first_frame_delta_ticks/L");
+  debugTree->Branch("exo2_frame_count", &debugExo2FrameCount, "exo2_frame_count/I");
 
   const Long64_t nentries = tree->GetEntries();
   const Long64_t entriesToRead = limitByEventCount ? std::min(nentries, maxEntriesToRead) : nentries;
@@ -197,6 +246,43 @@ void draw_raw_timestamp_axis(const char *inputFile,
       ++eventsWithNonZeroTS;
       if (topTimeNs > maxTimeNs) maxTimeNs = topTimeNs;
     }
+
+    if (previousTopTS > 0 && rawTopTimestamp >= previousTopTS) {
+      const ULong64_t dtTicks = rawTopTimestamp - previousTopTS;
+      if (dtTicks > 0 && dtTicks < minPositiveEventDeltaTicks) {
+        minPositiveEventDeltaTicks = dtTicks;
+      }
+      if (dtTicks > maxEventDeltaTicks) maxEventDeltaTicks = dtTicks;
+    }
+    lastTopTS = rawTopTimestamp;
+
+    if (eventsRead <= 200) {
+      debugEntry = ev;
+      debugRawEventIndex = rawEventIndex;
+      debugTopFrameType = rawTopFrameType;
+      debugTopNbItems = rawTopNbItems;
+      debugTopTimestamp = rawTopTimestamp;
+      debugDeltaFromFirstTicks = static_cast<Long64_t>(rawTopTimestamp - firstTopTS);
+      debugDeltaFromPreviousTicks = previousTopTS > 0
+                                      ? static_cast<Long64_t>(rawTopTimestamp - previousTopTS)
+                                      : 0;
+      debugDeltaFromFirstNs = debugDeltaFromFirstTicks * kTsTickToNs;
+      debugDeltaFromPreviousNs = debugDeltaFromPreviousTicks * kTsTickToNs;
+      debugNFrames = rawFrameTimestamp ? static_cast<Int_t>(rawFrameTimestamp->size()) : 0;
+      debugFirstFrameType = (rawFrameType && !rawFrameType->empty()) ? rawFrameType->at(0) : -1;
+      debugFirstFrameDeltaTicks = 0;
+      debugExo2FrameCount = 0;
+      if (rawFrameTimestamp && !rawFrameTimestamp->empty()) {
+        debugFirstFrameDeltaTicks = static_cast<Long64_t>(rawFrameTimestamp->at(0) - rawTopTimestamp);
+      }
+      if (rawFrameType) {
+        for (Int_t frameTypeValue : *rawFrameType) {
+          if (frameTypeValue == kMfmExo2FrameType) ++debugExo2FrameCount;
+        }
+      }
+      debugTree->Fill();
+    }
+    previousTopTS = rawTopTimestamp;
 
     if (!rawFrameTimestamp) continue;
     for (size_t i = 0; i < rawFrameTimestamp->size(); ++i) {
@@ -309,6 +395,7 @@ void draw_raw_timestamp_axis(const char *inputFile,
   gEventCumulative->Write();
   gFrameAllCumulative->Write();
   gFrameExo2Cumulative->Write();
+  debugTree->Write();
   runInfo.Write();
 
   TCanvas *canvas = new TCanvas("c_raw_timestamp_axis", "Raw timestamp axis", 1200, 900);
@@ -347,6 +434,18 @@ void draw_raw_timestamp_axis(const char *inputFile,
   std::cout << "Non-zero top TS events / 非零 top TS event 数: " << eventsWithNonZeroTS << std::endl;
   std::cout << "Events filled / 填充 event 数: " << eventsFilled << std::endl;
   std::cout << "Time axis high / 时间轴上限(ns): " << xHigh << std::endl;
+  std::cout << "First top TS / 第一个 top TS: " << firstTopTS << std::endl;
+  std::cout << "Last top TS / 最后一个 top TS: " << lastTopTS << std::endl;
+  if (minPositiveEventDeltaTicks == std::numeric_limits<ULong64_t>::max()) {
+    std::cout << "Min positive event delta / 最小非零 event 间隔: none" << std::endl;
+  } else {
+    std::cout << "Min positive event delta / 最小非零 event 间隔: "
+              << minPositiveEventDeltaTicks << " ticks = "
+              << minPositiveEventDeltaTicks * kTsTickToNs << " ns" << std::endl;
+  }
+  std::cout << "Max event delta / 最大 event 间隔: "
+            << maxEventDeltaTicks << " ticks = "
+            << maxEventDeltaTicks * kTsTickToNs << " ns" << std::endl;
   std::cout << "All frames filled / 填充 frame 数: " << allFramesFilled << std::endl;
   std::cout << "EXO2 frames filled / 填充 EXO2 frame 数: " << exo2FramesFilled << std::endl;
   std::cout << "Cumulative graphs written / 已写出累计曲线: "
