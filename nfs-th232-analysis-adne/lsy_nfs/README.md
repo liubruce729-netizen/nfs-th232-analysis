@@ -187,6 +187,32 @@ To generate an input list from an output directory recursively:
 默认只匹配 `nfs_run_*_r*.root`，不会包含 `mult3_nfs_run_*.root` 或 `nfs_histoExogam2_*.root`。
 By default it only matches `nfs_run_*_r*.root`, excluding `mult3_nfs_run_*.root` and `nfs_histoExogam2_*.root`.
 
+## Unmerged MFM TS Distribution / 未 merged MFM TS 分布
+
+`draw_unmerged_mfm_ts_distribution.C` 直接读取原始 MFM 文件，不经过 ADNE 的 detector 解包，也不需要先生成 RawTree。它从指定的顶层 MFM event 编号开始，绘制 top event、所有 frame、EXO2 frame 的 TS 分布和相邻 TS 差分；如果遇到 merge frame，会按 ADNE `GUser::CaptureRawFrame()` 的思路递归展开内部 frame。
+`draw_unmerged_mfm_ts_distribution.C` reads the raw MFM file directly, without ADNE detector unpacking or a prebuilt RawTree. Starting from a selected top-level MFM event index, it draws TS distributions and adjacent-TS differences for top events, all frames, and EXO2 frames. Merge frames are recursively unfolded following the same idea as ADNE `GUser::CaptureRawFrame()`.
+
+```bash
+cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
+source /home/user0/work/IJCLAB/NFS/NFS_env.sh
+
+root -l -b -q 'lsy_nfs/draw_unmerged_mfm_ts_distribution.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",0,5000,10)'
+
+# Start from top event 1000, analyse 2000 top events, write an explicit output.
+# 从第 1000 个顶层 event 开始，分析 2000 个顶层 event，并指定输出文件。
+root -l -b -q 'lsy_nfs/draw_unmerged_mfm_ts_distribution.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",1000,2000,10,"out/unmerged_mfm_ts_start1000.root")'
+```
+
+参数顺序：
+Arguments:
+
+```text
+inputMfmFile, startEvent, maxEvents, binWidthNs, outputFile, unfoldMerge, tsTickNs
+```
+
+默认 `tsTickNs=10`，即 ADNE/NFS 中使用的 `1 TS tick = 10 ns`。输出 ROOT 包含 `mfm_top_event_ts_distribution`、`mfm_all_frame_ts_distribution`、`mfm_exo2_frame_ts_distribution`、对应的 `delta_ts` 图、`mfm_frame_type_counts`，以及 `mfm_frame_table`。
+The default `tsTickNs=10`, matching the ADNE/NFS convention `1 TS tick = 10 ns`. The output ROOT file contains `mfm_top_event_ts_distribution`, `mfm_all_frame_ts_distribution`, `mfm_exo2_frame_ts_distribution`, the corresponding `delta_ts` histograms, `mfm_frame_type_counts`, and `mfm_frame_table`.
+
 ## RawTree EXO Gamma Timing Spectrum / RawTree EXO Gamma 时间谱分析
 
 `analyze_raw_exo_gamma_timing_spectrum.C` 用于在不知道束流周期时，从 RawTree 中的 EXO2 gamma frame 搜索周期成分。
