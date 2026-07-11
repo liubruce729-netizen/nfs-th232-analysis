@@ -10,10 +10,10 @@
 //     Peaks are fitted with Gaussian + linear background.
 //     Time spectra use fTime by default. The prompt peak width is estimated from
 //     its FWHM, then locked with a Gaussian-only fit and refitted with
-//     Gaussian + radioactive build-up tail + linear background.
+//     exGaussian + linear background.
 // CN: 能量谱重新按 0.5/bin、[0,4096] 建谱；峰形采用高斯 + 直线本底拟合。
 //     时间谱默认使用 fTime；先用半高宽估计 prompt 峰宽，再用纯高斯锁定峰位，
-//     最后用高斯 + 核素生成-衰变项 + 直线本底联合拟合。
+//     最后用指数修正高斯 exGaussian + 直线本底联合拟合。
 
 #include <algorithm>
 #include <cmath>
@@ -98,25 +98,57 @@ Double_t EnergyFitFunction(Double_t *x, Double_t *p)
   return p[0] * TMath::Gaus(x[0], p[1], p[2], false) + p[3] + p[4] * x[0];
 }
 
+double ExGaussianPdf(double xx, double mu, double sigma, double tau)
+{
+  // EN: Exponentially modified Gaussian PDF: a Gaussian timing resolution
+  //     convolved with a one-sided exponential tail.
+  // CN: 指数修正高斯 PDF：高斯时间分辨与单侧指数拖尾卷积。
+  if (sigma <= 0.0 || tau <= 0.0) return 0.0;
+  const double sqrt2 = TMath::Sqrt(2.0);
+  const double arg = (mu + sigma * sigma / tau - xx) / (sqrt2 * sigma);
+  const double expo = (mu - xx) / tau + sigma * sigma / (2.0 * tau * tau);
+  if (expo > 700.0) return 0.0;
+  const double value = 0.5 / tau * TMath::Exp(std::max(-700.0, expo)) * TMath::Erfc(arg);
+  return std::isfinite(value) ? value : 0.0;
+}
+
 Double_t TimeFitFunction(Double_t *x, Double_t *p)
 {
   const double xx = x[0];
-  const double mean = p[1];
-  const double buildStart = p[5];
-  double value = p[6] + p[7] * (xx - mean);
-  value += p[0] * TMath::Gaus(xx, mean, p[2], false);
-
-  // EN: After a movable start time near the prompt peak, model a daughter
-  //     population created at an approximately constant rate while decaying:
-  //     dN/dt = R - lambda N. With N(t0)=0, the observable activity is
-  //     proportional to 1 - exp(-(t-t0)/tau).
-  // CN: 在 prompt 峰附近允许一个可移动起点；起点之后，用近似常数速率产生、
-  //     同时按寿命衰变的核素数描述：dN/dt = R - lambda N。若 N(t0)=0，
-  //     活度近似正比于 1 - exp(-(t-t0)/tau)。
-  if (xx >= buildStart && p[4] > 0.0) {
-    value += p[3] * (1.0 - TMath::Exp(-(xx - buildStart) / p[4]));
-  }
+  const double mu = p[1];
+  double value = p[4] + p[5] * (xx - mu);
+  value += p[0] * ExGaussianPdf(xx, mu, p[2], p[3]);
   return value;
+}
+
+double ExGaussianMode(double mu, double sigma, double tau, double low, double high)
+{
+  // EN: The fitted time peak used for calibration is the mode of the
+  //     exGaussian component, not its mu parameter.
+  // CN: 用于刻度的时间峰位是 exGaussian 组件的峰顶，而不是参数 mu。
+  if (high <= low || sigma <= 0.0 || tau <= 0.0) return mu;
+  double a = std::max(low, mu - 6.0 * sigma);
+  double b = std::min(high, mu + std::max(10.0 * sigma, 10.0 * tau));
+  if (b <= a) {
+    a = low;
+    b = high;
+  }
+
+  const double gr = 0.5 * (TMath::Sqrt(5.0) - 1.0);
+  double c = b - gr * (b - a);
+  double d = a + gr * (b - a);
+  for (int i = 0; i < 100; ++i) {
+    if (ExGaussianPdf(c, mu, sigma, tau) < ExGaussianPdf(d, mu, sigma, tau)) {
+      a = c;
+      c = d;
+      d = a + gr * (b - a);
+    } else {
+      b = d;
+      d = c;
+      c = b - gr * (b - a);
+    }
+  }
+  return 0.5 * (a + b);
 }
 
 Double_t TimeGaussianFunction(Double_t *x, Double_t *p)
@@ -383,9 +415,10 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
     lockedFwhm = 2.354820045 * lockedSigma;
   }
 
-  const double finalHalfWidth = std::min(250.0, std::max(8.0, 2.0 * std::max(lockedFwhm, roughFwhm)));
-  const double fitLow = std::max(kTimeMin, lockedMean - finalHalfWidth);
-  const double fitHigh = std::min(kTimeMax, lockedMean + finalHalfWidth);
+  const double leftWidth = std::min(250.0, std::max({fitPre * 3.0, 1.5 * roughFwhm, 3.0 * lockedSigma, 40.0}));
+  const double rightWidth = std::min(500.0, std::max({fitPost * 3.0, 4.0 * roughFwhm, 5.0 * lockedSigma, 120.0}));
+  const double fitLow = std::max(kTimeMin, lockedMean - leftWidth);
+  const double fitHigh = std::min(kTimeMax, lockedMean + rightWidth);
   if (fitHigh <= fitLow) return result;
 
   const int lateLowBin = hist->GetXaxis()->FindBin(std::min(fitHigh, lockedMean + std::max(10.0, lockedSigma * 4.0)));
@@ -393,66 +426,64 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   double lateLevel = 0.0;
   int lateBins = 0;
   for (int b = std::max(1, lateLowBin); b <= std::min(hist->GetNbinsX(), lateHighBin); ++b) {
-    lateLevel += hist->GetBinContent(b);
+    const double y = hist->GetBinContent(b);
+    if (y > seedContent * 10.0) continue;
+    lateLevel += y;
     ++lateBins;
   }
   if (lateBins > 0) lateLevel /= static_cast<double>(lateBins);
 
-  TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 8);
-  fit->SetParNames("GausAmp", "GausMean", "GausSigma", "BuildAmp", "BuildTau", "BuildStart", "Bg0", "BgSlope");
+  TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 6);
+  fit->SetParNames("Area", "Mu", "Sigma", "Tau", "Bg0", "BgSlope");
 
-  const double meanGuard = std::max(2.0, lockedSigma * 1.5);
-  const double sigmaLow = std::max({0.20, lockedSigma * 0.35, roughSigma * 0.50});
-  const double sigmaHigh = std::min(60.0, std::max({lockedSigma * 2.5, lockedSigma + 1.0, roughSigma * 3.0}));
-  const double ampLow = std::max(0.1, lockedAmp * 0.25);
-  const double ampHigh = std::max(10.0, lockedAmp * 4.0);
-  const double meanLow = std::max(kTimeMin, lockedMean - meanGuard);
-  const double meanHigh = std::min(searchHigh, lockedMean + meanGuard);
-  const double buildAmpHigh = std::max({1.0, lockedAmp * 3.0, lateLevel * 10.0});
-  const double buildStartLow = std::max(fitLow, lockedMean - 15.0);
-  const double buildStartHigh = std::min(fitHigh, lockedMean + 15.0);
-  const double initialSigma = std::min(sigmaHigh * 0.95, std::max(sigmaLow * 1.05, lockedSigma));
-  const double initialBuildAmp = std::min(buildAmpHigh * 0.5, std::max(0.1, lateLevel));
-  const double initialBuildStart = std::min(buildStartHigh, std::max(buildStartLow, lockedMean));
   const double sideBandBg = AverageBinContentInRange(hist, 200.0, 250.0);
   const double bgScale = std::max({1.0, sideBandBg, lateLevel});
   const double bgHigh = std::max(10.0, bgScale * 20.0);
   const double slopeLimit = std::max(0.02, bgScale / 40.0);
+  const double initialBg = std::min(bgHigh * 0.5, std::max(0.0, sideBandBg));
+  const double initialMu = std::max(fitLow, std::min(lockedMean - 0.35 * roughFwhm, fitHigh));
+  const double initialSigma = std::max(0.5, std::min(120.0, std::max(lockedSigma, roughSigma)));
+  const double initialTau = std::max(2.0, std::min(500.0, roughFwhm * 0.7));
+  const double initialArea = std::max(10.0, (seedContent - initialBg) * std::max(10.0, initialSigma + initialTau) * 2.0);
+
+  const double muLow = std::max(kTimeMin, lockedMean - std::max(15.0, 1.2 * roughFwhm));
+  const double muHigh = std::min(searchHigh, lockedMean + std::max(10.0, 0.5 * roughFwhm));
+  const double sigmaLow = std::max(0.20, roughSigma * 0.35);
+  const double sigmaHigh = std::min(150.0, std::max({10.0, roughSigma * 2.5, lockedSigma * 2.5}));
+  const double tauLow = 0.5;
+  const double tauHigh = std::min(2000.0, std::max({30.0, roughFwhm * 10.0, rightWidth * 2.0}));
+  const double areaLow = std::max(1.0, initialArea * 0.02);
+  const double areaHigh = std::max(initialArea * 50.0, seedContent * std::max(roughFwhm, 10.0) * 100.0);
+
   fit->SetParameters(
-      std::min(ampHigh * 0.95, std::max(ampLow * 1.05, lockedAmp)),
-      std::min(meanHigh, std::max(meanLow, lockedMean)),
-      initialSigma,
-      initialBuildAmp,
-      35.0,
-      initialBuildStart,
-      std::min(bgHigh * 0.5, std::max(0.0, sideBandBg)),
+      std::min(areaHigh * 0.5, std::max(areaLow * 2.0, initialArea)),
+      std::min(muHigh, std::max(muLow, initialMu)),
+      std::min(sigmaHigh * 0.8, std::max(sigmaLow * 1.2, initialSigma)),
+      std::min(tauHigh * 0.5, std::max(tauLow * 2.0, initialTau)),
+      initialBg,
       0.0);
 
-  fit->SetParLimits(0, ampLow, ampHigh);
-  fit->SetParLimits(1, meanLow, meanHigh);
+  fit->SetParLimits(0, areaLow, areaHigh);
+  fit->SetParLimits(1, muLow, muHigh);
   fit->SetParLimits(2, sigmaLow, sigmaHigh);
-  // EN: BuildAmp is the asymptotic activity level of the constant-production
-  //     radioactive component. It starts from zero at BuildStart.
-  // CN: BuildAmp 是常数生成-衰变项的渐近活度；该项在 BuildStart 处从 0 开始。
-  fit->SetParLimits(3, 0.0, buildAmpHigh);
-  fit->SetParLimits(4, 1.0, 2000.0);
-  fit->SetParLimits(5, buildStartLow, buildStartHigh);
+  fit->SetParLimits(3, tauLow, tauHigh);
   // EN: Linear background. Bg0 is seeded from the 200-250 ns side-band.
   // CN: 直线背景。Bg0 初值来自 200-250 ns 旁带平均计数。
-  fit->SetParLimits(6, 0.0, bgHigh);
-  fit->SetParLimits(7, -slopeLimit, slopeLimit);
+  fit->SetParLimits(4, 0.0, bgHigh);
+  fit->SetParLimits(5, -slopeLimit, slopeLimit);
   fit->SetLineColor(kBlue + detector % 4);
 
   TFitResultPtr fitResult = hist->Fit(fit, "QRS0+");
   result.status = int(fitResult);
-  result.mean = fit->GetParameter(1);
+  result.mean = ExGaussianMode(fit->GetParameter(1), std::fabs(fit->GetParameter(2)), fit->GetParameter(3), fitLow, fitHigh);
   result.meanErr = fit->GetParError(1);
   result.sigma = std::fabs(fit->GetParameter(2));
   result.sigmaErr = fit->GetParError(2);
   result.amplitude = fit->GetParameter(0);
   const int ndf = fit->GetNDF();
   if (ndf > 0) result.chi2ndf = fit->GetChisquare() / ndf;
-  result.ok = std::isfinite(result.mean) && result.mean >= kTimeMin && result.mean <= searchHigh && result.sigma > 0.0;
+  result.ok = std::isfinite(result.mean) && result.mean >= kTimeMin &&
+              result.mean <= searchHigh + kTimeBinWidth && result.sigma > 0.0;
   return result;
 }
 
@@ -566,7 +597,7 @@ void DrawCrystalCanvas(TDirectory *dir, int det, TH1F *energy, TH1F *time,
     legend->SetFillStyle(0);
     legend->AddEntry(timeCopy, "Time spectrum", "l");
     if (gaussianFit) legend->AddEntry(gaussianFit, "Gaussian seed fit", "l");
-    if (finalFit) legend->AddEntry(finalFit, "Gaussian + build-up decay", "l");
+    if (finalFit) legend->AddEntry(finalFit, "exGaussian + line", "l");
     if (timeFit.ok) {
       legend->AddEntry((TObject *)nullptr, TString::Format("peak %.3f ns", timeFit.mean), "");
       legend->AddEntry((TObject *)nullptr, TString::Format("offset %.3f ns", kTargetTimeNs - timeFit.mean), "");
