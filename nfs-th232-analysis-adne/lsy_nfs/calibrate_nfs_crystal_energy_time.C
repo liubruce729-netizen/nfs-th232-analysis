@@ -10,10 +10,10 @@
 //     Peaks are fitted with Gaussian + linear background.
 //     Time spectra use fTime by default. The prompt peak width is estimated from
 //     its FWHM, then locked with a Gaussian-only fit and refitted with
-//     Gaussian + radioactive build-up tail.
+//     Gaussian + radioactive build-up tail + linear background.
 // CN: 能量谱重新按 0.5/bin、[0,4096] 建谱；峰形采用高斯 + 直线本底拟合。
 //     时间谱默认使用 fTime；先用半高宽估计 prompt 峰宽，再用纯高斯锁定峰位，
-//     最后用高斯 + 核素生成-衰变项联合拟合。
+//     最后用高斯 + 核素生成-衰变项 + 直线本底联合拟合。
 
 #include <algorithm>
 #include <cmath>
@@ -103,7 +103,8 @@ Double_t TimeFitFunction(Double_t *x, Double_t *p)
   const double xx = x[0];
   const double mean = p[1];
   const double buildStart = p[5];
-  double value = p[0] * TMath::Gaus(xx, mean, p[2], false);
+  double value = p[6] + p[7] * (xx - mean);
+  value += p[0] * TMath::Gaus(xx, mean, p[2], false);
 
   // EN: After a movable start time near the prompt peak, model a daughter
   //     population created at an approximately constant rate while decaying:
@@ -271,6 +272,28 @@ double EstimatePeakFwhm(TH1 *hist, int seedBin, double searchLow, double searchH
   return std::min(120.0, std::max(2.0, fwhm));
 }
 
+double AverageBinContentInRange(TH1 *hist, double low, double high)
+{
+  // EN: Average the bin contents in a stable side-band. For the time fit this
+  //     gives the first estimate of the linear background level.
+  // CN: 对稳定旁带区间求平均。时间拟合里用它作为直线背景的初始水平。
+  if (!hist || high <= low) return 0.0;
+  const int b1 = std::max(1, hist->GetXaxis()->FindBin(low));
+  const int b2 = std::min(hist->GetNbinsX(), hist->GetXaxis()->FindBin(high));
+  if (b2 < b1) return 0.0;
+
+  double sum = 0.0;
+  int n = 0;
+  for (int b = b1; b <= b2; ++b) {
+    const double center = hist->GetBinCenter(b);
+    if (center < low || center > high) continue;
+    sum += hist->GetBinContent(b);
+    ++n;
+  }
+  if (n <= 0) return 0.0;
+  return sum / static_cast<double>(n);
+}
+
 PeakFitResult FitEnergyPeak(TH1F *hist, const PeakRequest &request, int detector, double fitHalfWidth)
 {
   PeakFitResult result;
@@ -375,8 +398,8 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   }
   if (lateBins > 0) lateLevel /= static_cast<double>(lateBins);
 
-  TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 6);
-  fit->SetParNames("GausAmp", "GausMean", "GausSigma", "BuildAmp", "BuildTau", "BuildStart");
+  TF1 *fit = new TF1(TString::Format("fit_time_det%d", detector), TimeFitFunction, fitLow, fitHigh, 8);
+  fit->SetParNames("GausAmp", "GausMean", "GausSigma", "BuildAmp", "BuildTau", "BuildStart", "Bg0", "BgSlope");
 
   const double meanGuard = std::max(2.0, lockedSigma * 1.5);
   const double sigmaLow = std::max({0.20, lockedSigma * 0.35, roughSigma * 0.50});
@@ -391,13 +414,19 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   const double initialSigma = std::min(sigmaHigh * 0.95, std::max(sigmaLow * 1.05, lockedSigma));
   const double initialBuildAmp = std::min(buildAmpHigh * 0.5, std::max(0.1, lateLevel));
   const double initialBuildStart = std::min(buildStartHigh, std::max(buildStartLow, lockedMean));
+  const double sideBandBg = AverageBinContentInRange(hist, 200.0, 250.0);
+  const double bgScale = std::max({1.0, sideBandBg, lateLevel});
+  const double bgHigh = std::max(10.0, bgScale * 20.0);
+  const double slopeLimit = std::max(0.02, bgScale / 40.0);
   fit->SetParameters(
       std::min(ampHigh * 0.95, std::max(ampLow * 1.05, lockedAmp)),
       std::min(meanHigh, std::max(meanLow, lockedMean)),
       initialSigma,
       initialBuildAmp,
       35.0,
-      initialBuildStart);
+      initialBuildStart,
+      std::min(bgHigh * 0.5, std::max(0.0, sideBandBg)),
+      0.0);
 
   fit->SetParLimits(0, ampLow, ampHigh);
   fit->SetParLimits(1, meanLow, meanHigh);
@@ -408,6 +437,10 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   fit->SetParLimits(3, 0.0, buildAmpHigh);
   fit->SetParLimits(4, 1.0, 2000.0);
   fit->SetParLimits(5, buildStartLow, buildStartHigh);
+  // EN: Linear background. Bg0 is seeded from the 200-250 ns side-band.
+  // CN: 直线背景。Bg0 初值来自 200-250 ns 旁带平均计数。
+  fit->SetParLimits(6, 0.0, bgHigh);
+  fit->SetParLimits(7, -slopeLimit, slopeLimit);
   fit->SetLineColor(kBlue + detector % 4);
 
   TFitResultPtr fitResult = hist->Fit(fit, "QRS0+");
