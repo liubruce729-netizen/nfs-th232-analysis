@@ -42,6 +42,7 @@ namespace {
 
 constexpr Int_t kMfmExo2FrameType = 0x10;
 constexpr double kTsTickToNs = 10.0;
+constexpr Long64_t kMaxTimeAxisHistogramBins = 1000000;
 
 TString BuildDefaultRawTimestampOutputName(const char *inputFile)
 {
@@ -102,8 +103,16 @@ TH1D *BuildDeltaHistogram(const std::vector<double> &times,
     if (dt > maxDelta) maxDelta = dt;
   }
 
-  const Int_t nbins = std::max(1, static_cast<Int_t>(std::floor(maxDelta / binWidthNs)) + 1);
-  TH1D *hist = new TH1D(name, title, nbins, 0.0, nbins * binWidthNs);
+  const double requestedBinsDouble = std::floor(maxDelta / binWidthNs) + 1.0;
+  Int_t nbins = 1;
+  double actualBinWidthNs = binWidthNs;
+  if (requestedBinsDouble > static_cast<double>(kMaxTimeAxisHistogramBins)) {
+    nbins = static_cast<Int_t>(kMaxTimeAxisHistogramBins);
+    actualBinWidthNs = maxDelta / static_cast<double>(nbins);
+  } else {
+    nbins = std::max(1, static_cast<Int_t>(requestedBinsDouble));
+  }
+  TH1D *hist = new TH1D(name, title, nbins, 0.0, nbins * actualBinWidthNs);
   for (double dt : deltas) hist->Fill(dt);
   return hist;
 }
@@ -305,8 +314,20 @@ void draw_raw_timestamp_axis(const char *inputFile,
 
   // EN: Build the time axis from the real span of the selected events.
   // CN: 根据选中 event 的实际时间跨度自动建立时间轴。
-  const Int_t nbins = std::max(1, static_cast<Int_t>(std::floor(maxTimeNs / binWidthNs)) + 1);
-  const double xHigh = nbins * binWidthNs;
+  // EN: ROOT histograms use Int_t bin counts; cap huge ns-bin requests to avoid overflow.
+  // CN: ROOT 直方图 bin 数是 Int_t；对过大的 ns-bin 请求做上限保护，避免溢出成 0-10 ns。
+  const double requestedTimeBinsDouble = std::floor(maxTimeNs / binWidthNs) + 1.0;
+  Int_t nbins = 1;
+  double actualTimeBinWidthNs = binWidthNs;
+  bool timeAxisBinsCapped = false;
+  if (requestedTimeBinsDouble > static_cast<double>(kMaxTimeAxisHistogramBins)) {
+    nbins = static_cast<Int_t>(kMaxTimeAxisHistogramBins);
+    actualTimeBinWidthNs = maxTimeNs > 0.0 ? maxTimeNs / static_cast<double>(nbins) : binWidthNs;
+    timeAxisBinsCapped = true;
+  } else {
+    nbins = std::max(1, static_cast<Int_t>(requestedTimeBinsDouble));
+  }
+  const double xHigh = nbins * actualTimeBinWidthNs;
 
   // EN: Event-level axis: one fill per top-level MFM event.
   // CN: event 级时间轴：每个顶层 MFM event 填一次。
@@ -373,13 +394,16 @@ void draw_raw_timestamp_axis(const char *inputFile,
 
   TString config;
   config.Form("input=%s; tree=%s; max_events=%.9g; entries_to_read=%lld; bin_width_ns=%.9g; "
-              "time_axis_high_ns=%.9g; ts_tick_to_ns=%.9g; limit_by_event_count=%d; "
+              "time_axis_high_ns=%.9g; requested_bin_width_ns=%.9g; actual_bin_width_ns=%.9g; "
+              "requested_time_bins=%.9g; hist_bins=%d; bins_capped=%d; "
+              "ts_tick_to_ns=%.9g; limit_by_event_count=%d; "
               "events_read=%lld; nonzero_top_ts_events=%lld; events_filled=%lld; "
               "all_frames_filled=%lld; exo2_frames_filled=%lld",
               inputFile, treeName, maxEvents,
               static_cast<long long>(entriesToRead),
-              binWidthNs, xHigh, kTsTickToNs,
-              static_cast<int>(limitByEventCount),
+              binWidthNs, xHigh, binWidthNs, actualTimeBinWidthNs,
+              requestedTimeBinsDouble, nbins, static_cast<int>(timeAxisBinsCapped),
+              kTsTickToNs, static_cast<int>(limitByEventCount),
               static_cast<long long>(eventsRead),
               static_cast<long long>(eventsWithNonZeroTS),
               static_cast<long long>(eventsFilled),
@@ -434,6 +458,15 @@ void draw_raw_timestamp_axis(const char *inputFile,
   std::cout << "Non-zero top TS events / 非零 top TS event 数: " << eventsWithNonZeroTS << std::endl;
   std::cout << "Events filled / 填充 event 数: " << eventsFilled << std::endl;
   std::cout << "Time axis high / 时间轴上限(ns): " << xHigh << std::endl;
+  std::cout << "Requested time bins / 请求时间轴 bin 数: " << requestedTimeBinsDouble << std::endl;
+  std::cout << "Histogram bins / 实际直方图 bin 数: " << nbins << std::endl;
+  std::cout << "Requested bin width / 请求 bin 宽(ns): " << binWidthNs << std::endl;
+  std::cout << "Actual bin width / 实际 bin 宽(ns): " << actualTimeBinWidthNs << std::endl;
+  if (timeAxisBinsCapped) {
+    std::cout << "Warning / 注意: requested ns-bin histogram was too large; "
+              << "histogram bin count was capped, while cumulative graphs keep exact timestamps."
+              << std::endl;
+  }
   std::cout << "First top TS / 第一个 top TS: " << firstTopTS << std::endl;
   std::cout << "Last top TS / 最后一个 top TS: " << lastTopTS << std::endl;
   if (minPositiveEventDeltaTicks == std::numeric_limits<ULong64_t>::max()) {
