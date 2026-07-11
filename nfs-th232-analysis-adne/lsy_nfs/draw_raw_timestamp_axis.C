@@ -28,9 +28,11 @@
 #include <TFile.h>
 #include <TH1D.h>
 #include <TNamed.h>
+#include <TGraph.h>
 #include <TString.h>
 #include <TTree.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -54,6 +56,55 @@ TString BuildDefaultRawTimestampOutputName(const char *inputFile)
 bool HasBranch(TTree *tree, const char *branchName)
 {
   return tree && tree->GetBranch(branchName) != nullptr;
+}
+
+TGraph *BuildCumulativeGraph(const std::vector<double> &times,
+                             const char *name,
+                             const char *title)
+{
+  // EN: Use a graph rather than a huge 10 ns-bin histogram for sparse event streams.
+  // CN: 对稀疏事件流，用图保存累计计数，避免巨大且几乎全空的 10 ns/bin 直方图。
+  std::vector<double> sortedTimes = times;
+  std::sort(sortedTimes.begin(), sortedTimes.end());
+
+  TGraph *graph = new TGraph(static_cast<Int_t>(sortedTimes.size()));
+  graph->SetName(name);
+  graph->SetTitle(title);
+  for (size_t i = 0; i < sortedTimes.size(); ++i) {
+    graph->SetPoint(static_cast<Int_t>(i), sortedTimes[i], static_cast<double>(i + 1));
+  }
+  return graph;
+}
+
+TH1D *BuildDeltaHistogram(const std::vector<double> &times,
+                          const char *name,
+                          const char *title,
+                          double binWidthNs)
+{
+  // EN: Inter-event spacing is often the more useful ns-scale view for absolute TS.
+  // CN: 对绝对 TS 来说，相邻 event 间隔通常比超细计数谱更有诊断意义。
+  if (times.size() < 2) {
+    TH1D *empty = new TH1D(name, title, 1, 0.0, binWidthNs);
+    return empty;
+  }
+
+  std::vector<double> sortedTimes = times;
+  std::sort(sortedTimes.begin(), sortedTimes.end());
+
+  std::vector<double> deltas;
+  deltas.reserve(sortedTimes.size() - 1);
+  double maxDelta = 0.0;
+  for (size_t i = 1; i < sortedTimes.size(); ++i) {
+    const double dt = sortedTimes[i] - sortedTimes[i - 1];
+    if (dt < 0.0) continue;
+    deltas.push_back(dt);
+    if (dt > maxDelta) maxDelta = dt;
+  }
+
+  const Int_t nbins = std::max(1, static_cast<Int_t>(std::floor(maxDelta / binWidthNs)) + 1);
+  TH1D *hist = new TH1D(name, title, nbins, 0.0, nbins * binWidthNs);
+  for (double dt : deltas) hist->Fill(dt);
+  return hist;
 }
 
 } // namespace
@@ -196,6 +247,30 @@ void draw_raw_timestamp_axis(const char *inputFile,
   for (double t : frameAllTimesNs) hFrameAll->Fill(t);
   for (double t : frameExo2TimesNs) hFrameExo2->Fill(t);
 
+  TGraph *gEventCumulative = BuildCumulativeGraph(
+      eventTimesNs,
+      "raw_event_cumulative_count_vs_time",
+      "Raw event cumulative count;Time from first raw event (ns);Cumulative top-level MFM events");
+  TGraph *gFrameAllCumulative = BuildCumulativeGraph(
+      frameAllTimesNs,
+      "raw_frame_all_cumulative_count_vs_time",
+      "Raw all-frame cumulative count;Time from first raw event (ns);Cumulative frames");
+  TGraph *gFrameExo2Cumulative = BuildCumulativeGraph(
+      frameExo2TimesNs,
+      "raw_frame_exo2_cumulative_count_vs_time",
+      "Raw EXO2-frame cumulative count;Time from first raw event (ns);Cumulative EXO2 frames");
+
+  TH1D *hEventDelta = BuildDeltaHistogram(
+      eventTimesNs,
+      "raw_event_delta_time_ns",
+      "Raw event delta time;#DeltaT between consecutive top-level MFM events (ns);Pairs",
+      binWidthNs);
+  TH1D *hFrameExo2Delta = BuildDeltaHistogram(
+      frameExo2TimesNs,
+      "raw_frame_exo2_delta_time_ns",
+      "Raw EXO2 frame delta time;#DeltaT between consecutive EXO2 frames (ns);Pairs",
+      binWidthNs);
+
   const Long64_t eventsFilled = static_cast<Long64_t>(eventTimesNs.size());
   const Long64_t allFramesFilled = static_cast<Long64_t>(frameAllTimesNs.size());
   const Long64_t exo2FramesFilled = static_cast<Long64_t>(frameExo2TimesNs.size());
@@ -229,6 +304,11 @@ void draw_raw_timestamp_axis(const char *inputFile,
   hEvent->Write();
   hFrameAll->Write();
   hFrameExo2->Write();
+  hEventDelta->Write();
+  hFrameExo2Delta->Write();
+  gEventCumulative->Write();
+  gFrameAllCumulative->Write();
+  gFrameExo2Cumulative->Write();
   runInfo.Write();
 
   TCanvas *canvas = new TCanvas("c_raw_timestamp_axis", "Raw timestamp axis", 1200, 900);
@@ -241,6 +321,24 @@ void draw_raw_timestamp_axis(const char *inputFile,
   hFrameExo2->Draw("hist");
   canvas->Write();
 
+  TCanvas *cumulativeCanvas = new TCanvas("c_raw_timestamp_cumulative", "Raw cumulative timestamp axis", 1200, 900);
+  cumulativeCanvas->Divide(1, 3);
+  cumulativeCanvas->cd(1);
+  gEventCumulative->Draw("AL");
+  cumulativeCanvas->cd(2);
+  gFrameAllCumulative->Draw("AL");
+  cumulativeCanvas->cd(3);
+  gFrameExo2Cumulative->Draw("AL");
+  cumulativeCanvas->Write();
+
+  TCanvas *deltaCanvas = new TCanvas("c_raw_timestamp_delta", "Raw timestamp delta", 1200, 700);
+  deltaCanvas->Divide(1, 2);
+  deltaCanvas->cd(1);
+  hEventDelta->Draw("hist");
+  deltaCanvas->cd(2);
+  hFrameExo2Delta->Draw("hist");
+  deltaCanvas->Write();
+
   fout->Close();
   fin->Close();
 
@@ -251,4 +349,8 @@ void draw_raw_timestamp_axis(const char *inputFile,
   std::cout << "Time axis high / 时间轴上限(ns): " << xHigh << std::endl;
   std::cout << "All frames filled / 填充 frame 数: " << allFramesFilled << std::endl;
   std::cout << "EXO2 frames filled / 填充 EXO2 frame 数: " << exo2FramesFilled << std::endl;
+  std::cout << "Cumulative graphs written / 已写出累计曲线: "
+            << "raw_event_cumulative_count_vs_time, "
+            << "raw_frame_all_cumulative_count_vs_time, "
+            << "raw_frame_exo2_cumulative_count_vs_time" << std::endl;
 }
