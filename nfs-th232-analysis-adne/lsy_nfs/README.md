@@ -249,8 +249,8 @@ Arguments:
 inputRoot, histName, periodMinNs, periodMaxNs, periodStepNs, phaseBinNs, outputRoot, t0Ns, writeFolded1D
 ```
 
-其中 `phaseBinNs` 只是 folded 图的相位 bin 宽，不参与周期判断；周期判断来自每个候选 `periodNs` 下对已有直方图的折叠结果。
-`phaseBinNs` is only the phase-bin width of the folded histograms; it is not a physics cut. The scan is driven by folding the existing histogram at each trial `periodNs`.
+其中 `phaseBinNs` 是 folded 图的最小相位 bin 宽，不参与周期判断。宏会对每个候选周期使用 `floor(periodNs / phaseBinNs)` 个 bin，并让横轴严格结束在该周期，因此当周期步长小于 10 ns 时不会出现最后一个不完整低 bin。
+`phaseBinNs` is the minimum phase-bin width of the folded histograms; it is not a physics cut. For each trial period, the macro uses `floor(periodNs / phaseBinNs)` bins and ends the x-axis exactly at that period, so no artificially low partial final bin appears when the period step is smaller than 10 ns.
 
 主要输出对象：
 Main output objects:

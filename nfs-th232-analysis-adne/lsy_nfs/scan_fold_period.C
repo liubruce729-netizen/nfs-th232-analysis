@@ -11,7 +11,7 @@
 //   periodMinNs  : first trial period in ns / 最小扫描周期，单位 ns
 //   periodMaxNs  : last trial period in ns / 最大扫描周期，单位 ns
 //   periodStepNs : period scan step in ns / 周期扫描步长，单位 ns
-//   phaseBinNs   : folded phase histogram bin width; only ROOT binning, not physics cut / 折叠后相位图 bin 宽，仅用于直方图分箱
+//   phaseBinNs   : minimum folded phase bin width; only ROOT binning, not physics cut / 折叠后最小相位 bin 宽，仅用于直方图分箱
 //   outputRoot   : output ROOT path / 输出 ROOT 文件
 //   t0Ns         : optional phase origin in ns / 可选相位零点，单位 ns
 //   writeFolded1D: write one folded TH1D for each trial period / 是否为每个周期写一张折叠后的一维图
@@ -49,8 +49,12 @@ TH1D *FoldHistogramByPeriod(const TH1 *input,
                             const char *name,
                             const char *title)
 {
-  const Int_t nPhaseBins = std::max<Int_t>(1, static_cast<Int_t>(std::ceil(periodNs / phaseBinNs)));
-  const Double_t xMax = nPhaseBins * phaseBinNs;
+  // Treat phaseBinNs as the minimum bin width. The folded histogram ends exactly at periodNs,
+  // so there is no short final bin when periodStepNs is much smaller than phaseBinNs.
+  // 把 phaseBinNs 当作最小 bin 宽；横轴严格结束在 periodNs，避免周期步长很小时出现最后一个不完整 bin。
+  Int_t nPhaseBins = static_cast<Int_t>(std::floor(periodNs / phaseBinNs));
+  if (nPhaseBins < 1) nPhaseBins = 1;
+  const Double_t xMax = periodNs;
   TH1D *folded = new TH1D(name, title, nPhaseBins, 0.0, xMax);
   folded->SetDirectory(nullptr);
   folded->Sumw2(false);
@@ -177,14 +181,14 @@ void scan_fold_period(const char *inputRoot,
   }
 
   const TString configTitle = TString::Format(
-      "input=%s; hist=%s; period_min_ns=%.12g; period_max_ns=%.12g; period_step_ns=%.12g; phase_bin_ns=%.12g; t0_ns=%.12g; write_folded_1d=%d",
+      "input=%s; hist=%s; period_min_ns=%.12g; period_max_ns=%.12g; period_step_ns=%.12g; min_phase_bin_ns=%.12g; t0_ns=%.12g; write_folded_1d=%d",
       inputRoot, histName, periodMinNs, periodMaxNs, periodStepNs, phaseBinNs,
       t0Ns, writeFolded1D ? 1 : 0);
   TNamed config("period_scan_config", configTitle.Data());
   config.Write();
 
   TH2D hMapRaw("period_fold_map_raw",
-               "Period-fold scan raw counts;Time modulo trial period (ns);Trial period (ns);Counts",
+               "Period-fold scan counts;Time modulo trial period (ns);Trial period (ns);Counts",
                nPhaseBinsMax, 0.0, phaseMax, nPeriods, yMin, yMax);
   TH2D hMapNorm("period_fold_map_norm",
                 "Period-fold scan normalized by row mean;Time modulo trial period (ns);Trial period (ns);Counts / row mean",
