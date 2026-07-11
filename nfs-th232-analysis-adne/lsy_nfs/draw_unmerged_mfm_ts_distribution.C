@@ -24,8 +24,10 @@
 //   - If a top-level frame is a merge frame, inner frames are unfolded in the same
 //     way as ADNE's GUser::CaptureRawFrame() recursion.
 //     如果顶层 frame 是 merge frame，则按 ADNE 的 GUser::CaptureRawFrame() 思路递归展开内部 frame。
-//   - Delta-TS histograms sort TS before differencing, so all intervals are positive.
-//     所有 Delta-TS 图都会先对 TS 排序再相邻相减，因此间隔全为正值。
+//   - Sorted Delta-TS histograms sort TS before differencing, so all intervals are positive.
+//     排序 Delta-TS 图会先对 TS 排序再相邻相减，因此间隔全为正值。
+//   - Read-order Delta-TS histograms keep the original file/unfolding order and may contain negative intervals.
+//     未排序 Delta-TS 图保留原始文件/展开读取顺序，因此可能包含负间隔。
 //   - Per-crystal EXO2 plots are grouped by raw NUMEXO board id and trigger/crystal channel id.
 //     每个 crystal 的 EXO2 图按原始 NUMEXO board id 和 trigger/crystal channel id 分组。
 
@@ -298,6 +300,30 @@ TH1D *MakeSortedTickDeltaHistogram(const std::vector<ULong64_t> &ticks,
   return MakeSignedValueHistogram(deltas, name, title, requestedBinWidthNs);
 }
 
+// 按原始读取/展开顺序计算相邻 TS 差分。
+// 这个图保留文件中的顺序信息；如果 frame 顺序不是严格按时间排列，差分可能为负。
+TH1D *MakeReadOrderTickDeltaHistogram(const std::vector<ULong64_t> &ticks,
+                                      const char *name,
+                                      const char *title,
+                                      Double_t tsTickNs,
+                                      Double_t requestedBinWidthNs)
+{
+  std::vector<Double_t> deltas;
+  ULong64_t previousTick = 0;
+  bool hasPrevious = false;
+  for (ULong64_t tick : ticks) {
+    if (tick == 0) continue;
+    if (hasPrevious) {
+      const Long64_t current = static_cast<Long64_t>(tick);
+      const Long64_t previous = static_cast<Long64_t>(previousTick);
+      deltas.push_back(static_cast<Double_t>(current - previous) * tsTickNs);
+    }
+    previousTick = tick;
+    hasPrevious = true;
+  }
+  return MakeSignedValueHistogram(deltas, name, title, requestedBinWidthNs);
+}
+
 // 给每张关键直方图额外保存一个 canvas，方便直接打开 ROOT 文件浏览。
 void SaveCanvas(TH1 *hist, const char *drawOpt = "hist")
 {
@@ -518,17 +544,22 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
                                     "mfm_exo2_frame_delta_ts",
                                     "Delta TS between consecutive EXO2 frames;#DeltaT sorted by TS (ns);Pairs / bin",
                                     binWidthNs);
-  // 10. 从原始 tick 直接排序后计算相邻 frame 间隔，确保所有差分为正。
-  // 为兼容旧输出对象名，这里仍保留 *_read_order 名称，但内容已经改为 sorted TS delta。
-  TH1D *hAllReadOrderDt = MakeSortedTickDeltaHistogram(
+  // 10. 按原始读取/展开顺序计算相邻 frame 间隔。
+  // 这保留文件中的顺序信息；如果原始 frame 没有按 TS 严格排序，图中可能出现负值。
+  TH1D *hTopReadOrderDt = MakeReadOrderTickDeltaHistogram(
+      topEventTs,
+      "mfm_top_event_delta_ts_read_order",
+      "Read-order Delta TS between consecutive top-level events;#DeltaT in read order (ns);Pairs / bin",
+      tsTickNs, binWidthNs);
+  TH1D *hAllReadOrderDt = MakeReadOrderTickDeltaHistogram(
       allFrameTs,
       "mfm_all_frame_delta_ts_read_order",
-      "Sorted Delta TS between consecutive frames;#DeltaT after TS sorting (ns);Pairs / bin",
+      "Read-order Delta TS between consecutive frames;#DeltaT in read order (ns);Pairs / bin",
       tsTickNs, binWidthNs);
-  TH1D *hExoReadOrderDt = MakeSortedTickDeltaHistogram(
+  TH1D *hExoReadOrderDt = MakeReadOrderTickDeltaHistogram(
       exo2FrameTs,
       "mfm_exo2_frame_delta_ts_read_order",
-      "Sorted Delta TS between consecutive EXO2 frames;#DeltaT after TS sorting (ns);Pairs / bin",
+      "Read-order Delta TS between consecutive EXO2 frames;#DeltaT in read order (ns);Pairs / bin",
       tsTickNs, binWidthNs);
 
   hTop->Write();
@@ -537,6 +568,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   hTopDt->Write();
   hAllDt->Write();
   hExoDt->Write();
+  hTopReadOrderDt->Write();
   hAllReadOrderDt->Write();
   hExoReadOrderDt->Write();
 
@@ -591,11 +623,18 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
           TString::Format("mfm_exo2_%s_delta_ts_sorted", tag.Data()),
           TString::Format("EXO2 %s sorted Delta TS;#DeltaT after TS sorting (ns);Pairs / bin", label.Data()),
           tsTickNs, binWidthNs);
+      TH1D *hCrystalReadOrderDelta = MakeReadOrderTickDeltaHistogram(
+          kv.second,
+          TString::Format("mfm_exo2_%s_delta_ts_read_order", tag.Data()),
+          TString::Format("EXO2 %s read-order Delta TS;#DeltaT in read order (ns);Pairs / bin", label.Data()),
+          tsTickNs, binWidthNs);
 
       hCrystalTs->Write();
       hCrystalDelta->Write();
+      hCrystalReadOrderDelta->Write();
       SaveCanvas(hCrystalTs);
       SaveCanvas(hCrystalDelta);
+      SaveCanvas(hCrystalReadOrderDelta);
     }
     hCrystalCounts.SetEntries(exo2FrameTs.size());
     hCrystalCounts.Write();
@@ -634,6 +673,7 @@ void draw_unmerged_mfm_ts_distribution(const char *inputMfmFile,
   SaveCanvas(hTopDt);
   SaveCanvas(hAllDt);
   SaveCanvas(hExoDt);
+  SaveCanvas(hTopReadOrderDt);
   SaveCanvas(hAllReadOrderDt);
   SaveCanvas(hExoReadOrderDt);
 
