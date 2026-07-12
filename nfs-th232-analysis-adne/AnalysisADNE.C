@@ -16,10 +16,74 @@
 #include <signal.h>
 #include <yaml-cpp/yaml.h> 
 #include <stdlib.h>
+#include <cerrno>
+#include <cctype>
 #include <limits>
+#include <string>
 
 using namespace std;
 
+
+namespace {
+std::string TrimConfigValue(std::string value)
+{
+	std::string::size_type first = 0;
+	while(first < value.size() && std::isspace(static_cast<unsigned char>(value[first]))) first++;
+	std::string::size_type last = value.size();
+	while(last > first && std::isspace(static_cast<unsigned char>(value[last-1]))) last--;
+	return value.substr(first,last-first);
+}
+
+bool StripSecondsSuffix(std::string &value)
+{
+	value = TrimConfigValue(value);
+	if(value.empty()) return false;
+	char last = value[value.size()-1];
+	if(last == 's' || last == 'S') {
+		value.erase(value.size()-1);
+		value = TrimConfigValue(value);
+		return true;
+	}
+	return false;
+}
+
+bool ParseNonNegativeSeconds(std::string value, Double_t &seconds)
+{
+	value = TrimConfigValue(value);
+	if(value.empty()) return false;
+	char *end = NULL;
+	errno = 0;
+	Double_t parsed = strtod(value.c_str(),&end);
+	if(end == value.c_str() || errno != 0) return false;
+	while(end && *end != '\0') {
+		if(!std::isspace(static_cast<unsigned char>(*end))) return false;
+		end++;
+	}
+	if(parsed < 0.) return false;
+	seconds = parsed;
+	return true;
+}
+
+bool ParseNonNegativeUInt(std::string value, UInt_t &number)
+{
+	value = TrimConfigValue(value);
+	if(value.empty() || value[0] == '-') return false;
+	char *end = NULL;
+	errno = 0;
+	unsigned long long parsed = strtoull(value.c_str(),&end,10);
+	if(end == value.c_str() || errno != 0) return false;
+	while(end && *end != '\0') {
+		if(!std::isspace(static_cast<unsigned char>(*end))) return false;
+		end++;
+	}
+	if(parsed > std::numeric_limits<UInt_t>::max()) {
+		number = std::numeric_limits<UInt_t>::max();
+		return true;
+	}
+	number = static_cast<UInt_t>(parsed);
+	return true;
+}
+}
 
 bool isPortInUse(int port) {
 
@@ -100,37 +164,59 @@ int main(int argc, char* argv[]){
 	
 	YAML::Node config = YAML::LoadFile("Yaml_config_files/config.yaml");
 	std::string inputFile  = config["analysis"]["filename"].as<std::string>();
-	UInt_t maxEventsToProcess = 0; // 0 means full file / 0 表示处理完整文件
-	UInt_t startEventToSkip = 0; // skip this many events at the beginning of each file / 每个文件开头跳过的event数
+	UInt_t maxEventsToProcess = 0; // EN: numeric max_events means processed events after start_time. CN: 数字形式max_events表示start_time之后处理的event数
+	Bool_t maxEventsIsTimeWindow = false;
+	Double_t maxTimeWindowSeconds = 0.;
+	Double_t startTimeSeconds = 0.; // EN: seconds after the first frame TS. CN: 相对第一个frame时间戳的起始秒数
 	if(config["analysis"]["max_events"]) {
-		Long64_t configuredMaxEvents = config["analysis"]["max_events"].as<Long64_t>();
-		if(configuredMaxEvents > 0) {
-			if(static_cast<ULong64_t>(configuredMaxEvents) > std::numeric_limits<UInt_t>::max()) {
-				maxEventsToProcess = std::numeric_limits<UInt_t>::max();
-				cerr << "analysis.max_events is larger than UInt_t, clamped to " << maxEventsToProcess << endl;
+		std::string configuredMaxEvents = config["analysis"]["max_events"].as<std::string>();
+		std::string maxValue = configuredMaxEvents;
+		Bool_t hasSecondsSuffix = StripSecondsSuffix(maxValue);
+		if(hasSecondsSuffix) {
+			Double_t parsedSeconds = 0.;
+			if(ParseNonNegativeSeconds(maxValue,parsedSeconds)) {
+				if(parsedSeconds > 0.) {
+					maxEventsIsTimeWindow = true;
+					maxTimeWindowSeconds = parsedSeconds;
+				}
 			}
 			else {
-				maxEventsToProcess = static_cast<UInt_t>(configuredMaxEvents);
+				cerr << "Invalid analysis.max_events time value: " << configuredMaxEvents << endl;
 			}
+		}
+		else {
+			UInt_t parsedEvents = 0;
+			if(ParseNonNegativeUInt(maxValue,parsedEvents)) {
+				maxEventsToProcess = parsedEvents;
+			}
+			else {
+				cerr << "Invalid analysis.max_events value: " << configuredMaxEvents << "; use an integer event count or a seconds value such as 30s" << endl;
+			}
+		}
+	}
+	if(config["analysis"]["start_time"]) {
+		std::string configuredStartTime = config["analysis"]["start_time"].as<std::string>();
+		std::string startValue = configuredStartTime;
+		StripSecondsSuffix(startValue);
+		Double_t parsedStartTime = 0.;
+		if(ParseNonNegativeSeconds(startValue,parsedStartTime)) {
+			startTimeSeconds = parsedStartTime;
+		}
+		else {
+			cerr << "Invalid analysis.start_time value: " << configuredStartTime << "; use seconds, e.g. 0s or 12.5s" << endl;
 		}
 	}
 	if(config["analysis"]["start_event"]) {
-		Long64_t configuredStartEvent = config["analysis"]["start_event"].as<Long64_t>();
-		if(configuredStartEvent > 0) {
-			if(static_cast<ULong64_t>(configuredStartEvent) > std::numeric_limits<UInt_t>::max()) {
-				startEventToSkip = std::numeric_limits<UInt_t>::max();
-				cerr << "analysis.start_event is larger than UInt_t, clamped to " << startEventToSkip << endl;
-			}
-			else {
-				startEventToSkip = static_cast<UInt_t>(configuredStartEvent);
-			}
-		}
+		cerr << "analysis.start_event is deprecated and ignored; use analysis.start_time in seconds" << endl;
 	}
-	if(maxEventsToProcess > 0) {
-		cout << "ADNE max events per input file: " << maxEventsToProcess << endl;
+	if(startTimeSeconds > 0.) {
+		cout << "ADNE start time per input file: " << startTimeSeconds << " s after first frame TS" << endl;
 	}
-	if(startEventToSkip > 0) {
-		cout << "ADNE start event skip per input file: " << startEventToSkip << endl;
+	if(maxEventsIsTimeWindow) {
+		cout << "ADNE max time window per input file: " << maxTimeWindowSeconds << " s after start_time" << endl;
+	}
+	else if(maxEventsToProcess > 0) {
+		cout << "ADNE max events per input file after start_time: " << maxEventsToProcess << endl;
 	}
 	
 	
@@ -298,20 +384,10 @@ int main(int argc, char* argv[]){
 		}
 		
  		printf("\033[32m **********  Run #%d sub %d treatment starts **********   \033[m \n",RunNumb,RunNumbSub);
-		aa->SetStartEventToSkip(startEventToSkip);
+		aa->SetRunTimeWindow(startTimeSeconds,maxEventsToProcess,maxEventsIsTimeWindow,maxTimeWindowSeconds);
 		 //Start Time
 		std::time_t start = std::time(nullptr);	
-		if(maxEventsToProcess > 0) {
-			ULong64_t requestedEvents = static_cast<ULong64_t>(startEventToSkip) + static_cast<ULong64_t>(maxEventsToProcess);
-			UInt_t eventsToRead = std::numeric_limits<UInt_t>::max();
-			if(requestedEvents < static_cast<ULong64_t>(eventsToRead)) {
-				eventsToRead = static_cast<UInt_t>(requestedEvents);
-			}
-			if(startEventToSkip > 0) {
-				cout << "ADNE events to read per input file: " << eventsToRead << " (start_event + max_events)" << endl;
-			}
-			aa->DoRun(eventsToRead);
-		}
+		if(maxEventsToProcess > 0 && startTimeSeconds <= 0. && !maxEventsIsTimeWindow) aa->DoRun(maxEventsToProcess);
 		else aa->DoRun();
 		serv->StopServer();
 		file->Close();

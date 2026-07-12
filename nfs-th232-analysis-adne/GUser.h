@@ -140,8 +140,15 @@ class GUser : public  GAcq{
   bool fNfsExoAnaCrystalTimeCorrection;
   TString fNfsExoAnaCorrectionPath;
   std::vector<TString> fNfsExoAnaDisabledCrystals;
-  UInt_t fStartEventToSkip;
-  UInt_t fEventsSeenInCurrentRun;
+  Double_t fStartTimeSeconds;
+  Bool_t fUseMaxTimeWindow;
+  Double_t fMaxTimeSeconds;
+  UInt_t fMaxEventsToProcess;
+  UInt_t fProcessedEventsInCurrentRun;
+  ULong64_t fRunTimeZeroTS;
+  Bool_t fRunTimeZeroValid;
+  Bool_t fTimeWindowStarted;
+  Bool_t fTimeWindowStopPrinted;
   TH1F *MergeFrameDeltaTS;
   TH1F *MergeDetectorFrameDeltaTS;
   TH1F *MFMKey;
@@ -177,8 +184,7 @@ class GUser : public  GAcq{
   bool IsNFSExoAnaRawTreeEnabled() const { return fNfsExoAnaRawTree; }
   bool IsNFSExoAnaCrystalTimeCorrectionEnabled() const { return fNfsExoAnaCrystalTimeCorrection; }
   TString GetNFSExoAnaCorrectionPath() const { return fNfsExoAnaCorrectionPath; }
-  void SetStartEventToSkip(UInt_t startEvent);
-  UInt_t GetStartEventToSkip() const { return fStartEventToSkip; }
+  void SetRunTimeWindow(Double_t startTimeSeconds, UInt_t maxEvents, Bool_t useMaxTimeWindow, Double_t maxTimeSeconds);
   
   int eventcounter,tvb;
   int MFMtype;

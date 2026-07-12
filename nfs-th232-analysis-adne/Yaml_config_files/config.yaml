@@ -8,8 +8,8 @@ nfs_exo_ana:
 
 analysis:
   filename: "ListRun.txt"
-  max_events: 0  # EN: 0 means full file; positive value limits events per input file. CN: 0表示完整文件；正数限制每个输入文件处理的event数
-  start_event: 0  # EN: skip this many events at the beginning of each input file. CN: 每个输入文件开头跳过的event数
+  max_events: 0  # EN: 0 means full file; number means events; value ending with s means seconds after start_time, e.g. 30s. CN: 0表示完整文件；数字表示event数；以s结尾表示从start_time开始取多少秒，例如30s
+  start_time: 0s  # EN: analysis starts this many seconds after the first frame timestamp. CN: 从第一个frame时间戳开始，延迟多少秒后开始取结果
   spectra_port: 9095
   tree_exogam2: false 
   tree_trigger: false 

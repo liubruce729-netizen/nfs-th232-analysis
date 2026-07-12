@@ -113,8 +113,15 @@ GUser::GUser (GDevice* _fDevIn, GDevice* _fDevOut)
   fNfsExoAnaCrystalTimeCorrection = false;
   fNfsExoAnaCorrectionPath = "";
   fNfsExoAnaDisabledCrystals.clear();
-  fStartEventToSkip = 0;
-  fEventsSeenInCurrentRun = 0;
+  fStartTimeSeconds = 0.;
+  fUseMaxTimeWindow = false;
+  fMaxTimeSeconds = 0.;
+  fMaxEventsToProcess = 0;
+  fProcessedEventsInCurrentRun = 0;
+  fRunTimeZeroTS = 0;
+  fRunTimeZeroValid = false;
+  fTimeWindowStarted = false;
+  fTimeWindowStopPrinted = false;
   YAML::Node nfsExoAna = config["nfs_exo_ana"];
   if (nfsExoAna) {
     if (nfsExoAna["tree"]) fNfsExoAnaTree = nfsExoAna["tree"].as<bool>();
@@ -195,7 +202,7 @@ GUser::GUser (GDevice* _fDevIn, GDevice* _fDevOut)
   MakeTreeOnly=false;
   SpyOnly=false;
   fRawEventCounter=0;
-  fEventsSeenInCurrentRun=0;
+  fProcessedEventsInCurrentRun=0;
   bool controlYalm;
    
   if(controlYalm=config["Guser"]["exogam2"]["clover0"].as<bool>()) fExogam2->ActivateClover(0); //ecc#// from 2022 and numexo2 eccId==flangeId
@@ -412,11 +419,14 @@ GUser::~GUser()  {
 
 //______________________________________________________________
 
-void GUser::SetStartEventToSkip(UInt_t startEvent)
+void GUser::SetRunTimeWindow(Double_t startTimeSeconds, UInt_t maxEvents, Bool_t useMaxTimeWindow, Double_t maxTimeSeconds)
 {
-  // EN: start_event is applied independently to each input file.
-  // CN: start_event 对每个输入文件分别生效。
-  fStartEventToSkip = startEvent;
+  // EN: The window is applied independently to each input file. TS ticks are 10 ns, so seconds are converted with 1e8 ticks/s.
+  // CN: 时间窗口对每个输入文件分别生效。TS tick为10 ns，因此秒和tick之间按1e8 tick/s转换。
+  fStartTimeSeconds = startTimeSeconds > 0. ? startTimeSeconds : 0.;
+  fMaxEventsToProcess = maxEvents;
+  fUseMaxTimeWindow = useMaxTimeWindow;
+  fMaxTimeSeconds = maxTimeSeconds > 0. ? maxTimeSeconds : 0.;
 }
 
 //______________________________________________________________
@@ -993,9 +1003,19 @@ void GUser::InitUserRun()
   	
   printf("\033[33m----> Completed \033[m \n");
   eventcounter=tvb=0;
-  fEventsSeenInCurrentRun=0;
-  if(fStartEventToSkip > 0) {
-    cout << "ADNE start_event skip per input file: " << fStartEventToSkip << endl;
+  fProcessedEventsInCurrentRun=0;
+  fRunTimeZeroTS=0;
+  fRunTimeZeroValid=false;
+  fTimeWindowStarted=false;
+  fTimeWindowStopPrinted=false;
+  if(fStartTimeSeconds > 0.) {
+    cout << "ADNE start_time per input file: " << fStartTimeSeconds << " s after first frame TS" << endl;
+  }
+  if(fUseMaxTimeWindow && fMaxTimeSeconds > 0.) {
+    cout << "ADNE max time window per input file: " << fMaxTimeSeconds << " s after start_time" << endl;
+  }
+  else if(fMaxEventsToProcess > 0) {
+    cout << "ADNE max processed events per input file: " << fMaxEventsToProcess << endl;
   }
   cerr<<""<<endl;		
   PreviousTime=date.GetMinute();
@@ -1013,16 +1033,42 @@ void GUser::User()
 {
   
   
-  fEventsSeenInCurrentRun++;
-  if(fStartEventToSkip > 0 && fEventsSeenInCurrentRun <= fStartEventToSkip) {
-    // EN: skip the original ADNE treatment completely before unpack/tree/spec filling.
-    // CN: 在 unpack/tree/spec 填充之前完全跳过这些起始 event。
-    if(fEventsSeenInCurrentRun == 1) {
-      cout << "ADNE skipping first " << fStartEventToSkip << " events in this input file" << endl;
+  GEventMFM* pMFMevent = (GEventMFM*)GetEvent(); // acces a l'evenement
+  pCommonFrame->SetAttributs(pMFMevent->GetFrame()->GetPointHeader());
+  const ULong64_t currentTopTS = pCommonFrame->GetTimeStamp();
+
+  if(!fRunTimeZeroValid && currentTopTS > 0) {
+    fRunTimeZeroTS = currentTopTS;
+    fRunTimeZeroValid = true;
+    if(fStartTimeSeconds > 0. || fUseMaxTimeWindow) {
+      cout << "ADNE time zero TS for this input file: " << fRunTimeZeroTS << endl;
     }
-    if(fEventsSeenInCurrentRun == fStartEventToSkip) {
-      cout << "ADNE finished start_event skip: " << fStartEventToSkip << " events" << endl;
+  }
+
+  Double_t elapsedSeconds = 0.;
+  if(fRunTimeZeroValid) {
+    if(currentTopTS >= fRunTimeZeroTS) elapsedSeconds = (currentTopTS - fRunTimeZeroTS) / 1e8;
+    else elapsedSeconds = -static_cast<Double_t>(fRunTimeZeroTS - currentTopTS) / 1e8;
+  }
+
+  if((fStartTimeSeconds > 0. || fUseMaxTimeWindow) && !fRunTimeZeroValid) {
+    return;
+  }
+  if(fRunTimeZeroValid && fStartTimeSeconds > 0. && elapsedSeconds < fStartTimeSeconds) {
+    return;
+  }
+  if(!fTimeWindowStarted) {
+    fTimeWindowStarted = true;
+    if(fStartTimeSeconds > 0. || fUseMaxTimeWindow) {
+      cout << "ADNE time window started at elapsed time " << elapsedSeconds << " s" << endl;
     }
+  }
+  if(fRunTimeZeroValid && fUseMaxTimeWindow && fMaxTimeSeconds > 0. && elapsedSeconds >= fStartTimeSeconds + fMaxTimeSeconds) {
+    if(!fTimeWindowStopPrinted) {
+      cout << "ADNE max time window reached at elapsed time " << elapsedSeconds << " s; stopping this input file" << endl;
+      fTimeWindowStopPrinted = true;
+    }
+    SetStop(true);
     return;
   }
 
@@ -1044,9 +1090,7 @@ void GUser::User()
   Exogam2b=Exogam2REAb=  Exogamb=Triggerb=MWb=Tacb=eventOK=nowcheck=CsIb=NWallb=Parisb=Genericb=EbyEb=VamosICb=false;
   uint16_t label,value;
    
-  GEventMFM* pMFMevent = (GEventMFM*)GetEvent(); // acces � l'evenement
   eventcounter++;
-  pCommonFrame->SetAttributs(pMFMevent->GetFrame()->GetPointHeader());
 
   if(RawTreeFillBool){
     CaptureRawEvent(pCommonFrame);
@@ -1175,6 +1219,12 @@ void GUser::User()
   if(TreeFillBool)LocalTree->Fill();
   if(NfsTreeFillBool)NfsTree->Fill();
   if(NfsMult3TreeFillBool && fExogam2->GetExogam2Data()->GetE877CloverVetoMult()>=kNfsVetoCloverMultiplicityMin)NfsMult3Tree->Fill();
+
+  fProcessedEventsInCurrentRun++;
+  if(!fUseMaxTimeWindow && fMaxEventsToProcess > 0 && fProcessedEventsInCurrentRun >= fMaxEventsToProcess) {
+    cout << "ADNE max processed events reached: " << fProcessedEventsInCurrentRun << "; stopping this input file" << endl;
+    SetStop(true);
+  }
   
   
   
