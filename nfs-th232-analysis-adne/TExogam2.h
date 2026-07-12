@@ -175,6 +175,7 @@ class TExogam2 : public TDetector {
    TH1F * fNfsAllCrystalTimestampDiff;
    TH1F * fNfsAllCrystalTsMinusTdc;
    TH1F * fNfsCrystalTimestampDiff[16*4];
+   TH1F * fNfsCrystalTsMinusTdc[16*4];
    TH1F * fNfsCrystalDeltaT[16*4];
    TH1F * fNfsCrystalEnergy[16*4];
    TH1F * fNfsCrystalBgoEnergy[16*4];

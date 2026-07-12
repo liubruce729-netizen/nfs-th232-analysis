@@ -47,6 +47,7 @@ TExogam2::TExogam2(bool bspec)
    fNfsAllGammaGammaMatrixNoCut=NULL;
    for(Int_t i=0;i<16*4;i++){
       fNfsCrystalTimestampDiff[i]=NULL;
+      fNfsCrystalTsMinusTdc[i]=NULL;
       fNfsCrystalDeltaT[i]=NULL;
       fNfsCrystalEnergy[i]=NULL;
       fNfsCrystalBgoEnergy[i]=NULL;
@@ -398,6 +399,13 @@ bool TExogam2::NfsSpectraConstructor(){
 				fNfsCrystalTimestampDiff[id]=new TH1F(name,title,22000,-10000,100000);
 				HListNfsExogam2.Add(fNfsCrystalTimestampDiff[id]);
 
+				// EN: Same-frame comparison between folded absolute TS phase and reversed EXO2 DeltaT for this crystal.
+				// CN: 针对该 crystal，比较同一 frame 中折叠后的绝对 TS 相位和翻转后的 EXO2 DeltaT。
+				sprintf(name,"nfs_clover%d_crystal%d_ts_phase_minus_tdc",clo,cri);
+				sprintf(title,"Clover%d Crystal%d TS phase minus reversed TDC;TS phase - reversed DeltaT (ns);Crystal frames",clo,cri);
+				fNfsCrystalTsMinusTdc[id]=new TH1F(name,title,1600,-800,800);
+				HListNfsExogam2.Add(fNfsCrystalTsMinusTdc[id]);
+
 			sprintf(name,"nfs_clover%d_crystal%d_energy",clo,cri);
 			sprintf(title,"Clover%d Crystal%d Gamma Energy;Energy (keV);Counts",clo,cri);
 			fNfsCrystalEnergy[id]=new TH1F(name,title,4000,0,20000);
@@ -497,6 +505,7 @@ void TExogam2::FillNfsTimestampDiagnostics(ULong64_t timestamp, UShort_t rawDelt
 	while(diffNs>0.5*tdcPeriodNs)diffNs-=tdcPeriodNs;
 	while(diffNs<-0.5*tdcPeriodNs)diffNs+=tdcPeriodNs;
 	if(fNfsAllCrystalTsMinusTdc)fNfsAllCrystalTsMinusTdc->Fill(diffNs);
+	if(fNfsCrystalTsMinusTdc[mapFinger])fNfsCrystalTsMinusTdc[mapFinger]->Fill(diffNs);
 }
 
 void TExogam2::FillNfsSpectra(Int_t mapFinger, Int_t clo, Int_t cri, Float_t timeNs, Float_t energy, Float_t bgo, Float_t csi, Bool_t fillGlobalSpectra){
