@@ -101,6 +101,7 @@ int main(int argc, char* argv[]){
 	YAML::Node config = YAML::LoadFile("Yaml_config_files/config.yaml");
 	std::string inputFile  = config["analysis"]["filename"].as<std::string>();
 	UInt_t maxEventsToProcess = 0; // 0 means full file / 0 表示处理完整文件
+	UInt_t startEventToSkip = 0; // skip this many events at the beginning of each file / 每个文件开头跳过的event数
 	if(config["analysis"]["max_events"]) {
 		Long64_t configuredMaxEvents = config["analysis"]["max_events"].as<Long64_t>();
 		if(configuredMaxEvents > 0) {
@@ -113,8 +114,23 @@ int main(int argc, char* argv[]){
 			}
 		}
 	}
+	if(config["analysis"]["start_event"]) {
+		Long64_t configuredStartEvent = config["analysis"]["start_event"].as<Long64_t>();
+		if(configuredStartEvent > 0) {
+			if(static_cast<ULong64_t>(configuredStartEvent) > std::numeric_limits<UInt_t>::max()) {
+				startEventToSkip = std::numeric_limits<UInt_t>::max();
+				cerr << "analysis.start_event is larger than UInt_t, clamped to " << startEventToSkip << endl;
+			}
+			else {
+				startEventToSkip = static_cast<UInt_t>(configuredStartEvent);
+			}
+		}
+	}
 	if(maxEventsToProcess > 0) {
 		cout << "ADNE max events per input file: " << maxEventsToProcess << endl;
+	}
+	if(startEventToSkip > 0) {
+		cout << "ADNE start event skip per input file: " << startEventToSkip << endl;
 	}
 	
 	
@@ -282,9 +298,20 @@ int main(int argc, char* argv[]){
 		}
 		
  		printf("\033[32m **********  Run #%d sub %d treatment starts **********   \033[m \n",RunNumb,RunNumbSub);
+		aa->SetStartEventToSkip(startEventToSkip);
 		 //Start Time
 		std::time_t start = std::time(nullptr);	
-		if(maxEventsToProcess > 0) aa->DoRun(maxEventsToProcess);
+		if(maxEventsToProcess > 0) {
+			ULong64_t requestedEvents = static_cast<ULong64_t>(startEventToSkip) + static_cast<ULong64_t>(maxEventsToProcess);
+			UInt_t eventsToRead = std::numeric_limits<UInt_t>::max();
+			if(requestedEvents < static_cast<ULong64_t>(eventsToRead)) {
+				eventsToRead = static_cast<UInt_t>(requestedEvents);
+			}
+			if(startEventToSkip > 0) {
+				cout << "ADNE events to read per input file: " << eventsToRead << " (start_event + max_events)" << endl;
+			}
+			aa->DoRun(eventsToRead);
+		}
 		else aa->DoRun();
 		serv->StopServer();
 		file->Close();

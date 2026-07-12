@@ -113,6 +113,8 @@ GUser::GUser (GDevice* _fDevIn, GDevice* _fDevOut)
   fNfsExoAnaCrystalTimeCorrection = false;
   fNfsExoAnaCorrectionPath = "";
   fNfsExoAnaDisabledCrystals.clear();
+  fStartEventToSkip = 0;
+  fEventsSeenInCurrentRun = 0;
   YAML::Node nfsExoAna = config["nfs_exo_ana"];
   if (nfsExoAna) {
     if (nfsExoAna["tree"]) fNfsExoAnaTree = nfsExoAna["tree"].as<bool>();
@@ -193,6 +195,7 @@ GUser::GUser (GDevice* _fDevIn, GDevice* _fDevOut)
   MakeTreeOnly=false;
   SpyOnly=false;
   fRawEventCounter=0;
+  fEventsSeenInCurrentRun=0;
   bool controlYalm;
    
   if(controlYalm=config["Guser"]["exogam2"]["clover0"].as<bool>()) fExogam2->ActivateClover(0); //ecc#// from 2022 and numexo2 eccId==flangeId
@@ -405,6 +408,15 @@ GUser::~GUser()  {
  // delete   fGeneric[0];
   
   gROOT->cd();
+}
+
+//______________________________________________________________
+
+void GUser::SetStartEventToSkip(UInt_t startEvent)
+{
+  // EN: start_event is applied independently to each input file.
+  // CN: start_event 对每个输入文件分别生效。
+  fStartEventToSkip = startEvent;
 }
 
 //______________________________________________________________
@@ -981,6 +993,10 @@ void GUser::InitUserRun()
   	
   printf("\033[33m----> Completed \033[m \n");
   eventcounter=tvb=0;
+  fEventsSeenInCurrentRun=0;
+  if(fStartEventToSkip > 0) {
+    cout << "ADNE start_event skip per input file: " << fStartEventToSkip << endl;
+  }
   cerr<<""<<endl;		
   PreviousTime=date.GetMinute();
   CMFM_PARIS_FRAME_TYPE=CMFM_MERGE_TS_FRAME_TYPE=CMFM_EXO2_FRAME_TYPE=CMFM_EBY_EN_FRAME_TYPE=CMFM_EBY_TS_FRAME_TYPE=CMFM_EBY_EN_TS_FRAME_TYPE=CMFM_NEDA_FRAME_TYPE=CMFM_DIAMANT_FRAME_TYPE=CMFM_NEDACOMPRESS_FRAME_TYPE=CMFM_GENERIC_FRAME_TYPE=CMFM_EXO2REA_FRAME_TYPE=CMFM_VAMOSIC_FRAME_TYPE=00;
@@ -997,6 +1013,19 @@ void GUser::User()
 {
   
   
+  fEventsSeenInCurrentRun++;
+  if(fStartEventToSkip > 0 && fEventsSeenInCurrentRun <= fStartEventToSkip) {
+    // EN: skip the original ADNE treatment completely before unpack/tree/spec filling.
+    // CN: 在 unpack/tree/spec 填充之前完全跳过这些起始 event。
+    if(fEventsSeenInCurrentRun == 1) {
+      cout << "ADNE skipping first " << fStartEventToSkip << " events in this input file" << endl;
+    }
+    if(fEventsSeenInCurrentRun == fStartEventToSkip) {
+      cout << "ADNE finished start_event skip: " << fStartEventToSkip << " events" << endl;
+    }
+    return;
+  }
+
   if(debug)  printf("\033[31mInfo:: --------------< User Clear >------------------\033[m \n");
   fExogam2->Clear();
   fExogam2REA->Clear();
