@@ -46,6 +46,7 @@ TExogam2::TExogam2(bool bspec)
    fNfsCrystalCsiEfficiency=NULL;
    fNfsAllGammaGammaMatrixNoCut=NULL;
    for(Int_t i=0;i<16*4;i++){
+      fNfsCrystalTimestampDiff[i]=NULL;
       fNfsCrystalDeltaT[i]=NULL;
       fNfsCrystalEnergy[i]=NULL;
       fNfsCrystalBgoEnergy[i]=NULL;
@@ -61,6 +62,7 @@ TExogam2::TExogam2(bool bspec)
       NfsCrystalTimeCorrectionGain2[i]=0.;
       NfsCrystalGammaFlashPeak[i]=0.;
       NfsCrystalGammaFlashFwhm[i]=0.;
+      NfsPrevCrystalTimestampPerCrystal[i]=0;
    }
    for(Int_t i=0;i<16;i++){
       CloverDistanceMm[i]=0.;
@@ -389,6 +391,13 @@ bool TExogam2::NfsSpectraConstructor(){
 			fNfsCrystalDeltaT[id]=new TH1F(name,title,1600,0,1600);
 			HListNfsExogam2.Add(fNfsCrystalDeltaT[id]);
 
+				// EN: Consecutive timestamp spacing for this crystal only, in the original read/unpack order.
+				// CN: 只针对该 crystal，按原始读取/解包顺序计算相邻 timestamp 间隔。
+				sprintf(name,"nfs_clover%d_crystal%d_ts_diff",clo,cri);
+				sprintf(title,"Clover%d Crystal%d timestamp difference;#DeltaTS for same crystal (ns);Crystal-frame pairs",clo,cri);
+				fNfsCrystalTimestampDiff[id]=new TH1F(name,title,22000,-10000,100000);
+				HListNfsExogam2.Add(fNfsCrystalTimestampDiff[id]);
+
 			sprintf(name,"nfs_clover%d_crystal%d_energy",clo,cri);
 			sprintf(title,"Clover%d Crystal%d Gamma Energy;Energy (keV);Counts",clo,cri);
 			fNfsCrystalEnergy[id]=new TH1F(name,title,4000,0,20000);
@@ -463,6 +472,14 @@ void TExogam2::FillNfsTimestampDiagnostics(ULong64_t timestamp, UShort_t rawDelt
 		fNfsAllCrystalTimestampDiff->Fill(static_cast<Double_t>(dtTicks)*tsTickNs);
 	}
 	NfsPrevCrystalTimestamp=timestamp;
+
+	// EN: Same diagnostic, but with an independent previous TS for each crystal.
+	// CN: 同样的诊断量，但每个 crystal 独立保存上一条 TS。
+	if(NfsPrevCrystalTimestampPerCrystal[mapFinger]>0 && fNfsCrystalTimestampDiff[mapFinger]){
+		Long64_t dtTicks=static_cast<Long64_t>(timestamp)-static_cast<Long64_t>(NfsPrevCrystalTimestampPerCrystal[mapFinger]);
+		fNfsCrystalTimestampDiff[mapFinger]->Fill(static_cast<Double_t>(dtTicks)*tsTickNs);
+	}
+	NfsPrevCrystalTimestampPerCrystal[mapFinger]=timestamp;
 
 	// EN: EXO2 DeltaT is a 16-bit TDC value. For NFS timing we reverse it before converting to ns.
 	// CN: EXO2 DeltaT 是 16 bit TDC 值；NFS 时间分析中先翻转，再转换为 ns。

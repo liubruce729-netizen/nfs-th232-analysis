@@ -174,6 +174,7 @@ class TExogam2 : public TDetector {
    // CN: 写入 NFS 直方图文件的 timestamp 诊断谱。
    TH1F * fNfsAllCrystalTimestampDiff;
    TH1F * fNfsAllCrystalTsMinusTdc;
+   TH1F * fNfsCrystalTimestampDiff[16*4];
    TH1F * fNfsCrystalDeltaT[16*4];
    TH1F * fNfsCrystalEnergy[16*4];
    TH1F * fNfsCrystalBgoEnergy[16*4];
@@ -228,6 +229,7 @@ class TExogam2 : public TDetector {
    float NfsCrystalGammaFlashPeak[16*4];
    float NfsCrystalGammaFlashFwhm[16*4];
    ULong64_t NfsPrevCrystalTimestamp;
+   ULong64_t NfsPrevCrystalTimestampPerCrystal[16*4];
    float CloverDistanceMm[16];
    float PSABASE[23][3];
    float PSABASER[23];

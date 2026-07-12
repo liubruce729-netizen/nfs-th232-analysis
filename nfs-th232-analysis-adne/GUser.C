@@ -579,6 +579,7 @@ void GUser::InitUser()
       for(int cri=0; cri<4; cri++){
         int id=clo*4+cri;
         MySpectraList->AddSpectrum(fExogam2->fNfsCrystalDeltaT[id],"NFS/Crystal_Time");
+        MySpectraList->AddSpectrum(fExogam2->fNfsCrystalTimestampDiff[id],"NFS/Crystal_TS_Diagnostics_PerCrystal");
         MySpectraList->AddSpectrum(fExogam2->fNfsCrystalEnergy[id],"NFS/Crystal_Energy");
         MySpectraList->AddSpectrum(fExogam2->fNfsCrystalBgoEnergy[id],"NFS/Crystal_BGO");
         MySpectraList->AddSpectrum(fExogam2->fNfsCrystalCsiEnergy[id],"NFS/Crystal_CSI");
