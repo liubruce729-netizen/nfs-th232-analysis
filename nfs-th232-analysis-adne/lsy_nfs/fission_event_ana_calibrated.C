@@ -301,11 +301,18 @@ CalibrationDB ReadCalibrationDB(const char *summaryPath)
       cal.energyGain = value;
       cal.hasEnergy = true;
     }
-    if (ParseDouble(GetColumn(cols, hmap, "time_offset_to_442_ns"), value)) {
+    // EN: Prefer the new per-crystal standard reference columns, while still
+    //     accepting calibration summaries made by the older fixed-442 ns code.
+    // CN: 优先读取新的逐 crystal 标准时间列，同时兼容旧版固定 442 ns 列。
+    std::string timeOffsetText = GetColumn(cols, hmap, "time_offset_to_reference_ns");
+    if (timeOffsetText.empty()) timeOffsetText = GetColumn(cols, hmap, "time_offset_to_442_ns");
+    if (ParseDouble(timeOffsetText, value)) {
       cal.timeOffset = value;
       cal.hasTime = true;
     }
-    if (ParseDouble(GetColumn(cols, hmap, "time_gain_to_442"), value)) {
+    std::string timeGainText = GetColumn(cols, hmap, "time_gain_to_reference");
+    if (timeGainText.empty()) timeGainText = GetColumn(cols, hmap, "time_gain_to_442");
+    if (ParseDouble(timeGainText, value)) {
       cal.timeGain = value;
       cal.hasTime = true;
     }

@@ -4,24 +4,30 @@
 // Usage / 用法:
 //   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("out/nfs_run_23_r0.root")'
 //   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("out/nfs_run_23_r0.root,out/nfs_run_24_r0.root","out/run23_24_cal")'
-//   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("@out/nfs_run_files.txt","out/run_cal",-1,"fTime")'
+//   root -l -b -q 'lsy_nfs/calibrate_nfs_crystal_energy_time.C("@out/nfs_run_files.txt","out/run_cal",-1,"fTime",25,800,"out/standard_time_reference.txt",400)'
 //
 // EN: Energy spectra are rebuilt with 0.5-channel bins in [0,4096].
 //     Peaks are fitted with Gaussian + linear background.
 //     Time spectra use fTime by default. The prompt peak width is estimated from
 //     its FWHM, then locked with a Gaussian-only fit and refitted with
-//     exGaussian + linear background.
+//     exGaussian + linear background. With a reference table, every crystal is
+//     shifted to its own standard neutron-peak time.
 // CN: 能量谱重新按 0.5/bin、[0,4096] 建谱；峰形采用高斯 + 直线本底拟合。
 //     时间谱默认使用 fTime；先用半高宽估计 prompt 峰宽，再用纯高斯锁定峰位，
-//     最后用指数修正高斯 exGaussian + 直线本底联合拟合。
+//     最后用指数修正高斯 exGaussian + 直线本底联合拟合。提供标准表后，
+//     每个 crystal 都平移到各自的标准中子峰位置。
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -51,7 +57,7 @@ namespace {
 constexpr int kNClover = 16;
 constexpr int kNCrystalPerClover = 4;
 constexpr int kNDetector = kNClover * kNCrystalPerClover;
-constexpr double kTargetTimeNs = 442.0;
+constexpr double kLegacyTargetTimeNs = 442.0;
 constexpr double kEnergyMin = 0.0;
 constexpr double kEnergyMax = 4096.0;
 constexpr double kEnergyBinWidth = 0.5;
@@ -193,6 +199,110 @@ std::vector<TString> SplitInputs(const char *text)
   }
   delete tokens;
   return items;
+}
+
+struct TimeReferenceSet {
+  std::array<double, kNDetector> neutronPeakNs;
+  int valid = 0;
+
+  TimeReferenceSet()
+  {
+    neutronPeakNs.fill(std::numeric_limits<double>::quiet_NaN());
+  }
+};
+
+std::string TrimText(std::string text)
+{
+  auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+  text.erase(text.begin(), std::find_if(text.begin(), text.end(), notSpace));
+  text.erase(std::find_if(text.rbegin(), text.rend(), notSpace).base(), text.end());
+  return text;
+}
+
+std::vector<std::string> SplitWhitespace(const std::string &line)
+{
+  std::vector<std::string> fields;
+  std::stringstream stream(line);
+  std::string field;
+  while (stream >> field) fields.push_back(field);
+  return fields;
+}
+
+bool ParseFiniteDouble(const std::string &text, double &value)
+{
+  if (text.empty()) return false;
+  char *end = nullptr;
+  value = std::strtod(text.c_str(), &end);
+  return end && *end == '\0' && std::isfinite(value);
+}
+
+TimeReferenceSet ReadTimeReferenceFile(const char *path)
+{
+  TimeReferenceSet references;
+  TString referencePath(path ? path : "");
+  referencePath = referencePath.Strip(TString::kBoth);
+
+  // EN: Empty path keeps the old interface usable. New analyses should pass
+  //     the table produced by fit_nfs_standard_time_reference.C.
+  // CN: 空路径保留旧接口兼容性；新分析应传入标准时间宏生成的参考表。
+  if (referencePath.IsNull()) {
+    references.neutronPeakNs.fill(kLegacyTargetTimeNs);
+    references.valid = kNDetector;
+    std::cout << "No time-reference table supplied; use legacy " << kLegacyTargetTimeNs
+              << " ns for all crystals." << std::endl;
+    return references;
+  }
+
+  std::ifstream input(referencePath.Data());
+  if (!input.is_open()) {
+    std::cerr << "Cannot open time-reference table: " << referencePath << std::endl;
+    return references;
+  }
+
+  std::map<std::string, int> columns;
+  std::string line;
+  while (std::getline(input, line)) {
+    line = TrimText(line);
+    if (line.empty()) continue;
+    if (line[0] == '#') line = TrimText(line.substr(1));
+    const auto fields = SplitWhitespace(line);
+    if (fields.empty()) continue;
+
+    auto detectorIt = std::find(fields.begin(), fields.end(), "detector");
+    auto targetIt = std::find(fields.begin(), fields.end(), "neutron_reference_ns");
+    if (detectorIt != fields.end() && targetIt != fields.end()) {
+      columns.clear();
+      for (std::size_t i = 0; i < fields.size(); ++i) columns[fields[i]] = static_cast<int>(i);
+      continue;
+    }
+    if (columns.empty()) continue;
+
+    auto getField = [&](const char *name) -> std::string {
+      auto it = columns.find(name);
+      if (it == columns.end() || it->second < 0 || it->second >= static_cast<int>(fields.size())) return "";
+      return fields[it->second];
+    };
+
+    double detectorValue = 0.0;
+    double targetValue = 0.0;
+    if (!ParseFiniteDouble(getField("detector"), detectorValue) ||
+        !ParseFiniteDouble(getField("neutron_reference_ns"), targetValue)) continue;
+    const int detector = static_cast<int>(std::lround(detectorValue));
+    if (detector < 0 || detector >= kNDetector) continue;
+
+    auto validIt = columns.find("reference_valid");
+    if (validIt != columns.end()) {
+      double validValue = 0.0;
+      if (!ParseFiniteDouble(getField("reference_valid"), validValue) || validValue < 0.5) continue;
+    }
+
+    if (!std::isfinite(references.neutronPeakNs[detector])) references.valid++;
+    references.neutronPeakNs[detector] = targetValue;
+  }
+
+  std::cout << "Loaded per-crystal neutron time references: " << references.valid
+            << "/" << kNDetector << " from " << referencePath << std::endl;
+  return references;
 }
 
 TString ResolveBranch(TTree *tree, const char *leafName)
@@ -369,13 +479,14 @@ PeakFitResult FitEnergyPeak(TH1F *hist, const PeakRequest &request, int detector
   return result;
 }
 
-PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fitPre, double fitPost)
+PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchLow, double searchHigh,
+                          double fitPre, double fitPost)
 {
   PeakFitResult result;
   if (!hist || hist->GetEntries() <= 0.0) return result;
   result.entries = hist->GetEntries();
 
-  const int seedBin = FindMaxBinInRange(hist, kTimeMin, searchHigh);
+  const int seedBin = FindMaxBinInRange(hist, searchLow, searchHigh);
   if (seedBin < 0) return result;
   const double seed = hist->GetBinCenter(seedBin);
   const double seedContent = hist->GetBinContent(seedBin);
@@ -384,10 +495,10 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   // EN: Estimate a rough FWHM first. The Gaussian seed window follows the
   //     observed peak width instead of a fixed narrow value.
   // CN: 先根据半高点估计粗略 FWHM；高斯 seed 窗口跟随实际峰宽，而不是固定窄窗口。
-  const double roughFwhm = EstimatePeakFwhm(hist, seedBin, kTimeMin, searchHigh);
+  const double roughFwhm = EstimatePeakFwhm(hist, seedBin, searchLow, searchHigh);
   const double roughSigma = std::max(0.5, roughFwhm / 2.354820045);
   const double gaussianHalfWidth = std::min(120.0, std::max(4.0, roughFwhm));
-  const double gaussianLow = std::max(kTimeMin, seed - gaussianHalfWidth);
+  const double gaussianLow = std::max(searchLow, seed - gaussianHalfWidth);
   const double gaussianHigh = std::min(searchHigh, seed + gaussianHalfWidth);
   if (gaussianHigh <= gaussianLow) return result;
 
@@ -417,8 +528,8 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
 
   const double leftWidth = std::min(250.0, std::max({fitPre * 3.0, 1.5 * roughFwhm, 3.0 * lockedSigma, 40.0}));
   const double rightWidth = std::min(500.0, std::max({fitPost * 3.0, 4.0 * roughFwhm, 5.0 * lockedSigma, 120.0}));
-  const double fitLow = std::max(kTimeMin, lockedMean - leftWidth);
-  const double fitHigh = std::min(kTimeMax, lockedMean + rightWidth);
+  const double fitLow = std::max(searchLow, lockedMean - leftWidth);
+  const double fitHigh = std::min(searchHigh, lockedMean + rightWidth);
   if (fitHigh <= fitLow) return result;
 
   const int lateLowBin = hist->GetXaxis()->FindBin(std::min(fitHigh, lockedMean + std::max(10.0, lockedSigma * 4.0)));
@@ -446,7 +557,7 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   const double initialTau = std::max(2.0, std::min(500.0, roughFwhm * 0.7));
   const double initialArea = std::max(10.0, (seedContent - initialBg) * std::max(10.0, initialSigma + initialTau) * 2.0);
 
-  const double muLow = std::max(kTimeMin, lockedMean - std::max(15.0, 1.2 * roughFwhm));
+  const double muLow = std::max(searchLow, lockedMean - std::max(15.0, 1.2 * roughFwhm));
   const double muHigh = std::min(searchHigh, lockedMean + std::max(10.0, 0.5 * roughFwhm));
   const double sigmaLow = std::max(0.20, roughSigma * 0.35);
   const double sigmaHigh = std::min(150.0, std::max({10.0, roughSigma * 2.5, lockedSigma * 2.5}));
@@ -482,7 +593,7 @@ PeakFitResult FitTimePeak(TH1F *hist, int detector, double searchHigh, double fi
   result.amplitude = fit->GetParameter(0);
   const int ndf = fit->GetNDF();
   if (ndf > 0) result.chi2ndf = fit->GetChisquare() / ndf;
-  result.ok = std::isfinite(result.mean) && result.mean >= kTimeMin &&
+  result.ok = std::isfinite(result.mean) && result.mean >= searchLow &&
               result.mean <= searchHigh + kTimeBinWidth && result.sigma > 0.0;
   return result;
 }
@@ -523,7 +634,8 @@ CalibrationResult FitEnergyCalibration(const std::vector<PeakRequest> &requests,
 void DrawCrystalCanvas(TDirectory *dir, int det, TH1F *energy, TH1F *time,
                        const std::vector<PeakRequest> &requests,
                        const std::vector<PeakFitResult> &energyFits,
-                       const PeakFitResult &timeFit)
+                       const PeakFitResult &timeFit,
+                       double timeReferenceNs)
 {
   if (!dir) return;
   dir->cd();
@@ -600,7 +712,10 @@ void DrawCrystalCanvas(TDirectory *dir, int det, TH1F *energy, TH1F *time,
     if (finalFit) legend->AddEntry(finalFit, "exGaussian + line", "l");
     if (timeFit.ok) {
       legend->AddEntry((TObject *)nullptr, TString::Format("peak %.3f ns", timeFit.mean), "");
-      legend->AddEntry((TObject *)nullptr, TString::Format("offset %.3f ns", kTargetTimeNs - timeFit.mean), "");
+      if (std::isfinite(timeReferenceNs)) {
+        legend->AddEntry((TObject *)nullptr, TString::Format("reference %.3f ns", timeReferenceNs), "");
+        legend->AddEntry((TObject *)nullptr, TString::Format("offset %.3f ns", timeReferenceNs - timeFit.mean), "");
+      }
     }
     legend->Draw();
   }
@@ -612,18 +727,19 @@ void WriteDetailedText(const TString &path,
                        const std::vector<PeakRequest> &requests,
                        const std::vector<std::vector<PeakFitResult>> &energyFits,
                        const std::vector<CalibrationResult> &energyCal,
-                       const std::vector<PeakFitResult> &timeFits)
+                       const std::vector<PeakFitResult> &timeFits,
+                       const TimeReferenceSet &timeReferences)
 {
   std::ofstream out(path.Data());
   out << "# NFS crystal energy/time calibration summary\n";
   out << "# Energy calibration relation: E_cal_keV = energy_offset + energy_gain * E_raw\n";
-  out << "# Time suggestions: time_offset_to_442_ns = 442 - fitted_time_peak_ns; time_gain_to_442 = 442 / fitted_time_peak_ns\n";
+  out << "# Time relation: time_offset_to_reference_ns = time_reference_ns - fitted_time_peak_ns\n";
   out << "# clover crystal detector energy_entries";
   for (const auto &req : requests) {
     out << " " << req.label << "_raw " << req.label << "_raw_err " << req.label << "_sigma " << req.label << "_status";
   }
   out << " energy_offset energy_gain energy_gain2 energy_fit_points energy_fit_status energy_chi2_ndf";
-  out << " time_entries time_peak_ns time_peak_err_ns time_sigma_ns time_fwhm_ns time_fit_status time_chi2_ndf time_offset_to_442_ns time_gain_to_442\n";
+  out << " time_entries time_peak_ns time_peak_err_ns time_sigma_ns time_fwhm_ns time_fit_status time_chi2_ndf time_reference_ns time_offset_to_reference_ns time_gain_to_reference\n";
   out << std::setprecision(10);
 
   for (int det = 0; det < kNDetector; ++det) {
@@ -641,28 +757,33 @@ void WriteDetailedText(const TString &path,
     out << " " << cal.nPoints << " " << cal.status << " " << cal.chi2ndf;
     const auto &tf = timeFits[det];
     const double fwhm = tf.sigma * 2.354820045;
-    const double timeOffset = tf.ok ? (kTargetTimeNs - tf.mean) : std::numeric_limits<double>::quiet_NaN();
-    const double timeGain = (tf.ok && tf.mean > 0.0) ? (kTargetTimeNs / tf.mean) : std::numeric_limits<double>::quiet_NaN();
+    const double timeReference = timeReferences.neutronPeakNs[det];
+    const bool timeOk = tf.ok && std::isfinite(timeReference);
+    const double timeOffset = timeOk ? (timeReference - tf.mean) : std::numeric_limits<double>::quiet_NaN();
+    const double timeGain = (timeOk && tf.mean > 0.0) ? (timeReference / tf.mean) : std::numeric_limits<double>::quiet_NaN();
     out << " " << tf.entries << " " << tf.mean << " " << tf.meanErr << " " << tf.sigma << " " << fwhm;
-    out << " " << tf.status << " " << tf.chi2ndf << " " << timeOffset << " " << timeGain << "\n";
+    out << " " << tf.status << " " << tf.chi2ndf << " " << timeReference << " " << timeOffset << " " << timeGain << "\n";
   }
 }
 
 void WriteEccCandidate(const TString &path,
                        const std::vector<CalibrationResult> &energyCal,
-                       const std::vector<PeakFitResult> &timeFits)
+                       const std::vector<PeakFitResult> &timeFits,
+                       const TimeReferenceSet &timeReferences)
 {
   std::ofstream out(path.Data());
   out << "# Candidate ecc.cal coefficients from calibrate_nfs_crystal_energy_time.C\n";
   out << "# First 64 lines: energy offset gain gain2. Next 64 lines: time offset gain gain2.\n";
-  out << "# Time block uses offset-only correction to place the fitted time peak at 442 ns; gain is kept at 1.\n";
+  out << "# Time block uses offset-only correction to place each fitted peak at its per-crystal reference; gain is kept at 1.\n";
   out << std::setprecision(10);
   for (int det = 0; det < kNDetector; ++det) {
     if (energyCal[det].ok) out << energyCal[det].offset << " " << energyCal[det].gain << " 0\n";
     else out << "0 1 0\n";
   }
   for (int det = 0; det < kNDetector; ++det) {
-    if (timeFits[det].ok) out << (kTargetTimeNs - timeFits[det].mean) << " 1 0\n";
+    if (timeFits[det].ok && std::isfinite(timeReferences.neutronPeakNs[det])) {
+      out << (timeReferences.neutronPeakNs[det] - timeFits[det].mean) << " 1 0\n";
+    }
     else out << "0 1 0\n";
   }
 }
@@ -674,10 +795,25 @@ void calibrate_nfs_crystal_energy_time(const char *inputFiles,
                                        Long64_t maxEntries = -1,
                                        const char *timeBranchLeaf = "fTime",
                                        double energyFitHalfWidth = kDefaultEnergyFitHalfWidth,
-                                       double timeSearchHighNs = 800.0)
+                                       double timeSearchHighNs = 800.0,
+                                       const char *timeReferenceFile = "",
+                                       double timeSearchLowNs = 400.0)
 {
   if (!inputFiles || TString(inputFiles).Strip(TString::kBoth).IsNull()) {
     std::cerr << "No input ROOT file was provided." << std::endl;
+    return;
+  }
+  if (timeSearchHighNs <= timeSearchLowNs) {
+    std::cerr << "Invalid time search interval: " << timeSearchLowNs << " to "
+              << timeSearchHighNs << " ns." << std::endl;
+    return;
+  }
+
+  const TimeReferenceSet timeReferences = ReadTimeReferenceFile(timeReferenceFile);
+  TString referencePath(timeReferenceFile ? timeReferenceFile : "");
+  referencePath = referencePath.Strip(TString::kBoth);
+  if (!referencePath.IsNull() && timeReferences.valid <= 0) {
+    std::cerr << "No usable neutron_reference_ns rows found in: " << referencePath << std::endl;
     return;
   }
 
@@ -791,18 +927,21 @@ void calibrate_nfs_crystal_energy_time(const char *inputFiles,
       energyFits[det][i] = FitEnergyPeak(energyHists[det], peakRequests[i], det, energyFitHalfWidth);
     }
     energyCal[det] = FitEnergyCalibration(peakRequests, energyFits[det]);
-    timeFits[det] = FitTimePeak(timeHists[det], det, timeSearchHighNs, kDefaultTimeFitPre, kDefaultTimeFitPost);
+    timeFits[det] = FitTimePeak(timeHists[det], det, timeSearchLowNs, timeSearchHighNs,
+                                kDefaultTimeFitPre, kDefaultTimeFitPost);
 
     spectraDir->cd();
     energyHists[det]->Write();
     timeHists[det]->Write();
-    DrawCrystalCanvas(canvasDir, det, energyHists[det], timeHists[det], peakRequests, energyFits[det], timeFits[det]);
+    DrawCrystalCanvas(canvasDir, det, energyHists[det], timeHists[det], peakRequests,
+                      energyFits[det], timeFits[det], timeReferences.neutronPeakNs[det]);
   }
 
   summaryDir->cd();
-  const TString configTitle = TString::Format("input=%s; entries=%lld; time_branch=%s; energy_bin_width=%.3f; time_target_ns=%.3f; energy_fit_half_width=%.3f; time_search_high_ns=%.3f",
+  const TString configTitle = TString::Format("input=%s; entries=%lld; time_branch=%s; energy_bin_width=%.3f; time_reference_file=%s; energy_fit_half_width=%.3f; time_search_ns=%.3f:%.3f",
                                              inputFiles, totalEntries, timeBranch.Data(), kEnergyBinWidth,
-                                             kTargetTimeNs, energyFitHalfWidth, timeSearchHighNs);
+                                             referencePath.IsNull() ? "legacy_442_ns" : referencePath.Data(),
+                                             energyFitHalfWidth, timeSearchLowNs, timeSearchHighNs);
   TNamed config("CalibrationConfig", configTitle.Data());
   config.Write();
   TH1F summary("CalibrationSummary", "CalibrationSummary;Category;Counts", 5, 0.5, 5.5);
@@ -818,15 +957,15 @@ void calibrate_nfs_crystal_energy_time(const char *inputFiles,
   int timeOk = 0;
   for (int det = 0; det < kNDetector; ++det) {
     if (energyCal[det].ok && energyCal[det].nPoints >= 3) energyOk++;
-    if (timeFits[det].ok) timeOk++;
+    if (timeFits[det].ok && std::isfinite(timeReferences.neutronPeakNs[det])) timeOk++;
   }
   summary.SetBinContent(4, energyOk);
   summary.SetBinContent(5, timeOk);
   summary.Write();
   out.Close();
 
-  WriteDetailedText(txtOutPath, peakRequests, energyFits, energyCal, timeFits);
-  WriteEccCandidate(eccOutPath, energyCal, timeFits);
+  WriteDetailedText(txtOutPath, peakRequests, energyFits, energyCal, timeFits, timeReferences);
+  WriteEccCandidate(eccOutPath, energyCal, timeFits, timeReferences);
 
   std::cout << "Input files: " << inputFiles << std::endl;
   std::cout << "Tree entries processed: " << totalEntries << std::endl;
