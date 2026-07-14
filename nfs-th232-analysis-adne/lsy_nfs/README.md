@@ -260,6 +260,103 @@ MfmFrameTree->Draw("exo_delta_t", "is_exo2")
 MfmFrameTree->Draw("exo_ts_phase_minus_tdc_ns", "is_exo2")
 ```
 
+## MFM Binary To Raw Event Tree / MFM 二进制转 Raw Event Tree
+
+`mfm_to_raw_event_tree.C` 是面向 event 结构的严格 raw 转换器。与上面的 frame-row 调试宏不同，它把一个 top-level MFM frame 写成一个 `RawEventTree` entry；如果 top frame 是 `MERGE_EN` 或 `MERGE_TS`，默认递归展开所有子 frame，并把同一 event 中的 EXO2、NEDA、DIAMANT、PARIS、REA_GENERIC、VAMOSIC 和 EBYEDAT fire 分别保存为 vector。
+`mfm_to_raw_event_tree.C` is a strict raw converter organized by event. Unlike the frame-row diagnostic macro above, it writes one top-level MFM frame as one `RawEventTree` entry. `MERGE_EN` and `MERGE_TS` children are recursively unfolded by default, and EXO2, NEDA, DIAMANT, PARIS, REA_GENERIC, VAMOSIC, and EBYEDAT fires in the same event are stored in detector-specific vectors.
+
+该宏只依赖 ROOT 和 MFMlib，不调用 ADNE。它不做 LUT、能量/时间刻度、DeltaT 翻转、TS 差、相对时间、gamma-flash offset、TOF、中子能量、cut、addback 或 multiplicity。PARIS CFD 特别保存为原始 24-bit word，不调用会添加随机展宽并除以 1000 的 `GetCfd()`。
+The macro depends only on ROOT and MFMlib and does not invoke ADNE. It applies no LUT, energy/time calibration, DeltaT reversal, timestamp difference, relative time, gamma-flash offset, TOF, neutron-energy conversion, cut, addback, or multiplicity selection. PARIS CFD is stored as its raw 24-bit word; the smearing and `/1000` conversion in `GetCfd()` are deliberately bypassed.
+
+单文件输入：
+Single-file input:
+
+```bash
+cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
+source /home/user0/work/IJCLAB/NFS/NFS_env.sh
+
+# Convert the first 2000 top events; merge children are unfolded by default.
+# 转换前 2000 个 top event；默认展开 merge 子 frame。
+root -l -b -q 'lsy_nfs/mfm_to_raw_event_tree.C("data/run_0023.dat.25-09-23_14h32m42s.rawtest_64MiB",2000,"out/raw_event_tree.root")'
+
+# Convert the complete input file. maxEvents=-1 means all events.
+# 转换完整文件；maxEvents=-1 表示全部 event。
+root -l -b -q 'lsy_nfs/mfm_to_raw_event_tree.C("data/run.dat",-1,"out/run_raw_event_tree.root")'
+```
+
+列表输入：
+List input:
+
+```text
+# mfm_files.txt
+data/run_0023.dat.25-09-23_14h32m42s
+data/run_0023.dat.25-09-23_14h32m42s.1
+data/run_0023.dat.25-09-23_14h32m42s.2
+```
+
+```bash
+# @ explicitly selects list mode. A .txt/.list/.lst path is also auto-detected.
+# @ 显式选择列表模式；.txt/.list/.lst 路径也会自动识别。
+root -l -b -q 'lsy_nfs/mfm_to_raw_event_tree.C("@mfm_files.txt",-1,"out/all_raw_events.root")'
+```
+
+完整参数：
+Full arguments:
+
+```text
+inputSpec, maxEvents, outputFile, startEvent, unfoldMerge, progressEvery
+```
+
+- `maxEvents`: all files combined; `<0` means all / 所有文件合计写出数量，`<0` 表示全部
+- `startEvent`: global number of top events skipped across the ordered input sequence / 在有序输入序列开头全局跳过的 top event 数
+- `unfoldMerge`: default `true`; recursively unfold nested merge frames / 默认 `true`，递归展开嵌套 merge
+- `progressEvery`: progress interval; `<=0` disables progress output / 进度打印间隔，`<=0` 关闭
+
+输出对象：
+Output objects:
+
+```text
+RawEventTree                    one entry per top MFM event / 每个 top MFM event 一个 entry
+RawInputTree                    input manifest and counters / 输入文件清单与计数
+mfm_to_raw_event_tree_config    conversion settings / 转换参数
+```
+
+`RawInputTree.read_status` 为 `0` 表示正常/已处理，`1` 表示达到全局 `maxEvents` 后未打开该文件，负数表示打开或读取错误。即使提前达到数量上限，列表中的所有文件名仍会保留在该清单中。
+`RawInputTree.read_status` is `0` for normal/processed input, `1` when the file was not opened because the global `maxEvents` limit had already been reached, and negative for open/read errors. Every list item remains in the manifest even when the limit stops conversion early.
+
+分支分组和对齐规则：
+Branch grouping and alignment:
+
+- `raw_frame_*`: one element for every recursively visited frame / 每个递归访问 frame 一个元素
+- `raw_exo_*`: one element for every EXO2 fire / 每个 EXO2 fire 一个元素
+- `raw_neda_*`, `raw_diamant_*`, etc.: one element per corresponding detector fire / 每个对应探测器 fire 一个元素
+- `raw_<detector>_frame_index`: points to the corresponding `raw_frame_*` element / 回连到对应的 `raw_frame_*` 元素
+- `raw_neda_sample_word`: flat raw NEDA sample words including parity bits; use `raw_neda_sample_offset/count` for each fire / 展平的 NEDA 原始 sample word，保留 parity bit；用 offset/count 定位每个 fire
+- `raw_opaque_*`: byte-for-byte storage for unsupported, XML, or control frames / 对未支持、XML 或 control frame 逐字节保存
+
+所有 EXO2 地址信息保留在原始 `raw_exo_cristal_id` 中，没有应用 LUT，也没有生成物理 clover/crystal。需要人工拆分时：
+All EXO2 address information remains in raw `raw_exo_cristal_id`; no LUT or physical clover/crystal mapping is applied. For manual inspection:
+
+```text
+board_id = (cristal_id >> 5) & 0x07ff
+tg_id    = cristal_id & 0x001f
+```
+
+ROOT 快速检查：
+Quick ROOT checks:
+
+```cpp
+RawEventTree->Print()
+RawEventTree->Show(0)
+
+// All frame types and raw EXO fields in event 0.
+// 查看 event 0 的全部 frame type 和 EXO raw 字段。
+RawEventTree->Scan("event_index:raw_top_frame_type:raw_frame_type:raw_exo_cristal_id:raw_exo_delta_t:raw_exo_inner_m6", "event_index==0")
+```
+
+`raw_exo_*` 的长度就是该 event 的 EXO2 fire 数；`raw_frame_type` 还包括 top merge frame 本身以及其他 detector/control frame。非 EXO2 frame 不会在 `raw_exo_*` 中用 `-1` 补位。
+The length of `raw_exo_*` is the EXO2 fire count of that event. `raw_frame_type` also includes the top merge frame itself and other detector/control frames. Non-EXO2 frames are not padded into `raw_exo_*` with `-1` values.
+
 ## Period Folding Scan / 周期折叠扫描
 
 `scan_fold_period.C` 对一个已有 ROOT 一维直方图做周期扫描。每个候选周期都会把原图横轴按 `phase = (time - t0) mod period` 折叠，写出一张一维 folded 图；同时把所有周期的 folded 结果汇总成二维图，方便直接看周期变化。
