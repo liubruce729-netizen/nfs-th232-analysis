@@ -94,6 +94,26 @@ Command-line values are applied after YAML and therefore override it:
   --time-cal /actual/run/CalFile/ecc.cal
 ```
 
+The default event mode is `--event-treatment adne-last-frame`. It reproduces
+the current ADNE implementation in which `GUser::Unpack` assigns
+`Exogam2b = IsMFMExo(...)` for every EXO2 child and the last eligible EXO2
+frame therefore decides whether `Treat()` runs for the whole event.
+
+默认的 `--event-treatment adne-last-frame` 会复现当前 ADNE：每读到一个
+EXO2 子 frame，`GUser::Unpack` 都会覆盖 `Exogam2b`，所以最后一个可处理的
+EXO2 frame 决定整个 event 是否进入 `Treat()`。如果希望采用更合理的 OR 逻辑，
+即 event 中只要有一个已知 LUT frame 就重建，可显式使用：
+
+```bash
+./run_nfs_histo_from_raw_root.sh \
+  --input run.root --output hist_any_known.root \
+  --event-treatment any-known
+```
+
+These two modes can have different entry counts when the LUT is incomplete.
+For a strict comparison with an existing ADNE output, use the default mode and
+the exact LUT used by that ADNE run.
+
 The LUT and calibration files must be the files used for that acquisition.
 An old LUT is not interchangeable with a new electronics mapping. Unknown
 `(board, half-board)` combinations are skipped exactly as in
@@ -112,7 +132,8 @@ For each EXO2 frame:
 2. Require an active clover and `exo_inner6m > 10`.
 3. Apply the first 64 `ecc.cal` rows:
    `E = offset + gain*x + gain2*x*x`, with ADNE's optional `+/-0.5` ADC-channel
-   dither.
+   dither. Coefficients and stored calibrated values are rounded through the
+   same `Float_t` types used by `TExogam2Data`.
 4. Build Time exactly as the current NFS branch:
    - without crystal correction:
      `(65536-DeltaT)*0.024 + nfs_gammaFlashOffset`;
@@ -126,6 +147,10 @@ For each EXO2 frame:
    threshold.
 7. Fill addback, BGO/CSI-veto addback, event-level crystal cross talk, BGO/CSI
    efficiency profiles, and the ordered-pair no-cut addback gamma-gamma matrix.
+8. In events with more than one active clover, reproduce the otherwise unused
+   `Cal()` calls at the end of `TExogam2::Treat`. These calls do not fill an
+   NFS histogram but do advance ROOT's global random sequence and therefore
+   affect the next event's calibrated energy.
 
 The no-cut matrix uses only addback gammas satisfying `BGO <= 0 && CSI <= 0`.
 It applies no prompt, Time, TS, neutron-energy, or multiplicity gate.
@@ -144,9 +169,9 @@ The matching ADNE source locations are:
 
 ## Performance / 性能
 
-Only these ten branches are enabled:
+Only these twelve branches are enabled:
 
-`top_event_index`, `is_exo2`, `timestamp`, `exo_board_id`,
+`top_event_index`, `depth`, `data_source`, `is_exo2`, `timestamp`, `exo_board_id`,
 `exo_lut_halfboard`, `exo_status3`, `exo_delta_t`, `exo_inner6m`, `exo_bgo`,
 and `exo_csi`.
 
@@ -179,13 +204,42 @@ root -l -b -q \
   'compare_nfs_histo.C("standalone.root","adne_nfs_histo.root","comparison.tsv",1e-6)'
 ```
 
-The energy calibration uses ADNE-style random sub-channel dithering. The tool
-also consumes the legacy TDC/GOCCE random calls so that the sequence matches the
-current configuration with PSA disabled. If a different ADNE run consumes
-additional random numbers elsewhere, entries and spectra remain statistically
-equivalent but a few 1-keV addback bins can differ at bin boundaries. Use
-`--dither false` on both reference implementations when a deterministic
-cell-by-cell test is required.
+The energy calibration uses ADNE's `TRandom3` sub-channel dither with seed
+`4357` by default. Exact bin-level matching additionally requires the same:
+
+- input frame order and event grouping;
+- LUT, active/disabled crystals, YAML, and `ecc.cal`;
+- ROOT random seed and all random-number calls before each energy calibration;
+- `spec_exogam2=false` and `activate_psa=false`;
+- complete MFM frames in the primitive ROOT input.
+
+The standalone code reproduces the legacy TDC, GOCCE segment, and hidden
+`Treat()` random calls for that configuration. `--emulate-treat-rng false`
+is available only for diagnostics; it intentionally breaks later per-bin
+agreement. `--dither false` is deterministic but matches ADNE only if ADNE is
+also changed to disable the dither.
+
+Time itself does not use a random number. If crystal Time entries differ, first
+check the LUT and the event-treatment mode. If Time entries agree but individual
+energy or gamma-gamma cells differ, check the random sequence and `Float_t`
+rounding.
+
+## Exact Same-Input Test / 同输入逐 bin 验证
+
+On 2026-07-15, the 64 MiB local MFM sample was processed through both paths:
+
+1. MFM -> current ADNE -> `nfs_histoExogam2_1.root`;
+2. the same MFM -> `mfm_to_raw_root_tree.C` -> this standalone builder.
+
+After excluding the deliberately truncated sample's single incomplete EOF
+frame, `compare_nfs_histo.C` reported:
+
+- 512 histograms compared;
+- 512 exact matches;
+- 0 different, missing, or extra histograms.
+
+This comparison includes all crystal Time/energy spectra, addback spectra,
+efficiency and cross-talk objects, and the full no-cut gamma-gamma matrix.
 
 ## Local Full-File Test / 本地完整文件测试
 
@@ -196,7 +250,8 @@ On 2026-07-15 the complete
 - 45,407,226 top events;
 - 72,173,312 EXO2 frames;
 - all 16 internal histogram checks passed;
-- 39.45 s wall time and about 526 MiB maximum resident memory on this machine;
+- 49.18 s wall time and about 528 MiB maximum resident memory on this machine,
+  including 2,279,094,912 emulated hidden `Treat()` random calls;
 - 512 ADNE-compatible histograms were written.
 
 The 122 histograms shared with an older local ADNE `nfs_histo` file had identical
@@ -205,6 +260,9 @@ diagnostics present in the current ADNE source but absent from that older output
 
 This test also found that the repository's 2023 LUT does not describe all
 electronics in run134. Boards 112, 114, 115, 120, 131, and 140 account for
-18,460,271 skipped frames. This is an input-configuration mismatch, not a
-standalone reconstruction failure. Reprocess run134 with the LUT and `ecc.cal`
-actually used at the experiment before using the spectra for physics.
+18,460,271 unknown-LUT frames. In current-ADNE compatibility mode, 5,113,161
+otherwise accepted known-LUT frames were also discarded because their event's
+last EXO2 frame was unknown and `Treat()` was skipped. This is an
+input-configuration mismatch amplified by ADNE's last-frame gate, not a ROOT
+read failure. Reprocess run134 with the LUT and `ecc.cal` actually used at the
+experiment before using the spectra for physics.

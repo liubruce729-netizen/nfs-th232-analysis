@@ -99,9 +99,9 @@ std::vector<std::string> Split(const std::string &text, char delimiter) {
 }
 
 struct Coefficients {
-  double offset = 0.0;
-  double gain = 1.0;
-  double gain2 = 0.0;
+  float offset = 0.0F;
+  float gain = 1.0F;
+  float gain2 = 0.0F;
 };
 
 struct RuntimeConfig {
@@ -112,7 +112,9 @@ struct RuntimeConfig {
   bool useDefaultEnergyCalibration = false;
   bool neutronNfs = true;
   bool crystalTimeCorrection = false;
-  double gammaFlashOffsetNs = -700.4;
+  bool standardExogamSpec = false;
+  bool psaActive = false;
+  float gammaFlashOffsetNs = -700.4F;
   std::string timeCorrectionPath;
 
   RuntimeConfig() { enabledCrystals.fill(true); }
@@ -131,6 +133,8 @@ struct Options {
   std::optional<bool> crystalTimeCorrectionOverride;
   bool dither = true;
   unsigned int randomSeed = 4357;
+  std::string eventTreatment = "adne-last-frame";
+  bool emulateTreatRandom = true;
   Long64_t startEvents = 0;
   Long64_t maxEvents = 0;
   Long64_t progressEntries = 5000000;
@@ -158,6 +162,10 @@ void PrintUsage(const char *program) {
       << "  --time-correction BOOL    Override crystal_time_correction.\n"
       << "  --dither BOOL             ADNE-like +/-0.5 ADC-channel dither (default true).\n"
       << "  --random-seed N           Dither seed (default 4357, ROOT default here).\n"
+      << "  --event-treatment MODE    adne-last-frame (default) or any-known.\n"
+      << "                            ADNE 当前兼容模式，或事件内任一已知 frame 模式。\n"
+      << "  --emulate-treat-rng BOOL  Consume hidden Treat() Cal random calls (default true).\n"
+      << "                            补齐 Treat() 中未直接出图的 Cal 随机调用。\n"
       << "  --start-events N          Skip N top events before processing.\n"
       << "  --max-events N            Process at most N top events; 0 means all.\n"
       << "  --progress-entries N      Progress interval in MfmFrameTree rows.\n"
@@ -219,6 +227,10 @@ Options ParseArguments(int argc, char **argv) {
       options.dither = ParseBool(requireValue(i, arg));
     } else if (arg == "--random-seed") {
       options.randomSeed = static_cast<unsigned int>(std::stoul(requireValue(i, arg)));
+    } else if (arg == "--event-treatment") {
+      options.eventTreatment = ToLower(requireValue(i, arg));
+    } else if (arg == "--emulate-treat-rng") {
+      options.emulateTreatRandom = ParseBool(requireValue(i, arg));
     } else if (arg == "--start-events") {
       options.startEvents = std::stoll(requireValue(i, arg));
     } else if (arg == "--max-events") {
@@ -235,6 +247,9 @@ Options ParseArguments(int argc, char **argv) {
   if (options.energyCalibrationPath.empty()) throw std::runtime_error("--energy-cal is required");
   if (options.startEvents < 0 || options.maxEvents < 0) {
     throw std::runtime_error("--start-events and --max-events must be non-negative");
+  }
+  if (options.eventTreatment != "adne-last-frame" && options.eventTreatment != "any-known") {
+    throw std::runtime_error("--event-treatment must be adne-last-frame or any-known");
   }
 
   std::vector<std::string> uniqueInputs;
@@ -322,9 +337,12 @@ void LoadRelevantYaml(const std::string &path, RuntimeConfig &config) {
       continue;
     }
 
-    if (topSection == "Guser" && indent == 2 && rawValue.empty()) {
-      guserSection = key;
-      continue;
+    if (topSection == "Guser" && indent == 2) {
+      if (rawValue.empty()) {
+        guserSection = key;
+        continue;
+      }
+      if (key == "spec_exogam2") config.standardExogamSpec = ParseBool(rawValue);
     }
 
     if (topSection == "nfs_exo_ana") {
@@ -352,13 +370,15 @@ void LoadRelevantYaml(const std::string &path, RuntimeConfig &config) {
           }
         }
       } else if (key == "nfs_gammaFlashOffset") {
-        config.gammaFlashOffsetNs = std::stod(rawValue);
+        config.gammaFlashOffsetNs = std::stof(rawValue);
       } else if (key == "nfs_neutron") {
         config.neutronNfs = ParseBool(rawValue);
       } else if (key == "readcal_file") {
         config.readCalibrationFile = ParseBool(rawValue);
       } else if (key == "use_default_cal") {
         config.useDefaultEnergyCalibration = ParseBool(rawValue);
+      } else if (key == "activate_psa") {
+        config.psaActive = ParseBool(rawValue);
       }
     }
   }
@@ -473,15 +493,32 @@ double CalibrateWithDither(int raw, const Coefficients &coefficients, TRandom3 &
   return x * x * coefficients.gain2 + x * coefficients.gain + coefficients.offset;
 }
 
+void ConsumeUniformRandoms(TRandom3 &random, Long64_t count) {
+  // EN: TRandom3::RndmArray produces the exact same sequence as repeated
+  //     Uniform(1.0) calls, with much less function-call overhead.
+  // CN: TRandom3::RndmArray 与逐次调用 Uniform(1.0) 的序列逐位一致，但开销更低。
+  std::array<double, 4096> buffer{};
+  while (count > 0) {
+    const int chunk = static_cast<int>(std::min<Long64_t>(count, buffer.size()));
+    random.RndmArray(chunk, buffer.data());
+    count -= chunk;
+  }
+}
+
 struct Counters {
   Long64_t treeRows = 0;
   Long64_t topEventsSeen = 0;
   Long64_t topEventsProcessed = 0;
+  Long64_t topEventsTreated = 0;
+  Long64_t topEventsSkippedByTreatGate = 0;
   Long64_t exo2Frames = 0;
+  Long64_t nonzeroDataSourceExoFrames = 0;
+  Long64_t zeroTimestampFrames = 0;
   Long64_t unknownLutFrames = 0;
   Long64_t inactiveCloverFrames = 0;
   Long64_t lowCoreFrames = 0;
   Long64_t acceptedFrames = 0;
+  Long64_t acceptedFramesSkippedByTreatGate = 0;
   Long64_t positiveEnergyFrames = 0;
   Long64_t validTimePositiveEnergyFrames = 0;
   Long64_t enabledValidTimePositiveEnergyFrames = 0;
@@ -495,6 +532,7 @@ struct Counters {
   Long64_t cloverAddbackFires = 0;
   Long64_t vetoCloverAddbackFires = 0;
   Long64_t gammaGammaOrderedPairs = 0;
+  Long64_t emulatedTreatRandomCalls = 0;
   Long64_t nonMonotonicTopRows = 0;
 };
 
@@ -640,9 +678,9 @@ class Histograms {
                  const std::array<bool, kCrystals> &bgoFired,
                  const std::array<bool, kCrystals> &csiFired,
                  const std::array<bool, kClovers> &cloverFired,
-                 const std::array<double, kClovers> &cloverEnergy,
-                 const std::array<double, kClovers> &cloverBgo,
-                 const std::array<double, kClovers> &cloverCsi,
+                 const std::array<float, kClovers> &cloverEnergy,
+                 const std::array<float, kClovers> &cloverBgo,
+                 const std::array<float, kClovers> &cloverCsi,
                  const RuntimeConfig &config, Counters &counters) {
     std::vector<int> firedIds;
     for (int id = 0; id < kCrystals; ++id) {
@@ -790,14 +828,27 @@ class Histograms {
   std::array<ULong64_t, kCrystals> previousTimestampPerCrystal_{};
 };
 
+struct CrystalRecord {
+  int id = -1;
+  float timeNs = 0.0F;
+  float energy = 0.0F;
+  float bgo = 0.0F;
+  float csi = 0.0F;
+  bool enabled = false;
+};
+
 struct EventAccumulator {
   std::array<bool, kCrystals> crystalFired{};
   std::array<bool, kCrystals> bgoFired{};
   std::array<bool, kCrystals> csiFired{};
   std::array<bool, kClovers> cloverFired{};
-  std::array<double, kClovers> cloverEnergy{};
-  std::array<double, kClovers> cloverBgo{};
-  std::array<double, kClovers> cloverCsi{};
+  std::array<float, kClovers> cloverEnergy{};
+  std::array<float, kClovers> cloverBgo{};
+  std::array<float, kClovers> cloverCsi{};
+  std::array<int, kClovers> enabledEccPerClover{};
+  std::vector<CrystalRecord> crystalRecords;
+  bool anyKnownExo = false;
+  bool lastExoKnown = false;
 
   void Clear() {
     crystalFired.fill(false);
@@ -807,11 +858,17 @@ struct EventAccumulator {
     cloverEnergy.fill(0.0);
     cloverBgo.fill(0.0);
     cloverCsi.fill(0.0);
+    enabledEccPerClover.fill(0);
+    crystalRecords.clear();
+    anyKnownExo = false;
+    lastExoKnown = false;
   }
 };
 
 struct RawBranches {
   Long64_t topEventIndex = -1;
+  Int_t depth = 0;
+  UShort_t dataSource = 0;
   Bool_t isExo2 = false;
   ULong64_t timestamp = 0;
   Int_t board = -1;
@@ -823,8 +880,8 @@ struct RawBranches {
   Int_t csi = -1;
 
   void Attach(TTree &tree) {
-    const std::array<const char *, 10> required = {
-        "top_event_index", "is_exo2", "timestamp", "exo_board_id",
+    const std::array<const char *, 12> required = {
+        "top_event_index", "depth", "data_source", "is_exo2", "timestamp", "exo_board_id",
         "exo_lut_halfboard", "exo_status3", "exo_delta_t", "exo_inner6m",
         "exo_bgo", "exo_csi"};
     for (const char *name : required) {
@@ -834,6 +891,8 @@ struct RawBranches {
     tree.SetBranchStatus("*", 0);
     for (const char *name : required) tree.SetBranchStatus(name, 1);
     tree.SetBranchAddress("top_event_index", &topEventIndex);
+    tree.SetBranchAddress("depth", &depth);
+    tree.SetBranchAddress("data_source", &dataSource);
     tree.SetBranchAddress("is_exo2", &isExo2);
     tree.SetBranchAddress("timestamp", &timestamp);
     tree.SetBranchAddress("exo_board_id", &board);
@@ -858,11 +917,16 @@ void FillSummaryTree(TFile &output, Counters &counters) {
   BRANCH_COUNTER(treeRows);
   BRANCH_COUNTER(topEventsSeen);
   BRANCH_COUNTER(topEventsProcessed);
+  BRANCH_COUNTER(topEventsTreated);
+  BRANCH_COUNTER(topEventsSkippedByTreatGate);
   BRANCH_COUNTER(exo2Frames);
+  BRANCH_COUNTER(nonzeroDataSourceExoFrames);
+  BRANCH_COUNTER(zeroTimestampFrames);
   BRANCH_COUNTER(unknownLutFrames);
   BRANCH_COUNTER(inactiveCloverFrames);
   BRANCH_COUNTER(lowCoreFrames);
   BRANCH_COUNTER(acceptedFrames);
+  BRANCH_COUNTER(acceptedFramesSkippedByTreatGate);
   BRANCH_COUNTER(positiveEnergyFrames);
   BRANCH_COUNTER(validTimePositiveEnergyFrames);
   BRANCH_COUNTER(enabledValidTimePositiveEnergyFrames);
@@ -876,6 +940,7 @@ void FillSummaryTree(TFile &output, Counters &counters) {
   BRANCH_COUNTER(cloverAddbackFires);
   BRANCH_COUNTER(vetoCloverAddbackFires);
   BRANCH_COUNTER(gammaGammaOrderedPairs);
+  BRANCH_COUNTER(emulatedTreatRandomCalls);
   BRANCH_COUNTER(nonMonotonicTopRows);
 #undef BRANCH_COUNTER
   summary.Fill();
@@ -906,7 +971,7 @@ std::string BuildMetadata(const Options &options, const RuntimeConfig &config,
                           const ExogamLut &lut, const Counters &counters,
                           bool validationOk) {
   std::ostringstream text;
-  text << "producer=standalone-nfs-histo;version=1;tree=MfmFrameTree;"
+  text << "producer=standalone-nfs-histo;version=2;tree=MfmFrameTree;"
        << "event_key=top_event_index;lut=" << options.lutPath
        << ";lut_rows=" << lut.Size()
        << ";energy_cal=" << options.energyCalibrationPath
@@ -915,6 +980,10 @@ std::string BuildMetadata(const Options &options, const RuntimeConfig &config,
        << ";gamma_flash_offset_ns=" << config.gammaFlashOffsetNs
        << ";dither=" << (options.dither ? 1 : 0)
        << ";random_seed=" << options.randomSeed
+       << ";event_treatment=" << options.eventTreatment
+       << ";emulate_treat_rng=" << (options.emulateTreatRandom ? 1 : 0)
+       << ";spec_exogam2=" << (config.standardExogamSpec ? 1 : 0)
+       << ";psa_active=" << (config.psaActive ? 1 : 0)
        << ";validation=" << (validationOk ? "PASS" : "FAIL")
        << ";processed_top_events=" << counters.topEventsProcessed
        << ";inputs=";
@@ -953,6 +1022,9 @@ int Run(const Options &options) {
             << "  crystal time correction: " << (config.crystalTimeCorrection ? "true" : "false") << '\n'
             << "  ADC dither: " << (options.dither ? "true" : "false")
             << " seed=" << options.randomSeed << '\n'
+            << "  event treatment: " << options.eventTreatment << '\n'
+            << "  emulate Treat RNG: " << (options.emulateTreatRandom ? "true" : "false")
+            << '\n'
             << "  active clovers:";
   for (int clover = 0; clover < kClovers; ++clover) if (config.activeClovers[clover]) std::cout << ' ' << clover;
   std::cout << "\n  disabled crystals:";
@@ -965,6 +1037,11 @@ int Run(const Options &options) {
   }
   if (!anyDisabled) std::cout << " none";
   std::cout << '\n';
+  if (options.dither && (config.standardExogamSpec || config.psaActive)) {
+    std::cerr
+        << "WARNING: exact ADNE random-sequence compatibility is only implemented for "
+           "spec_exogam2=false and activate_psa=false.\n";
+  }
 
   Histograms histograms(config);
   Counters counters;
@@ -972,6 +1049,8 @@ int Run(const Options &options) {
   EventAccumulator event;
   event.Clear();
   TRandom3 random(options.randomSeed);
+  const int activeCloverCount = static_cast<int>(
+      std::count(config.activeClovers.begin(), config.activeClovers.end(), true));
   Long64_t selectedEventsTotal = 0;
   Long64_t seenEventsTotal = 0;
   bool stop = false;
@@ -990,12 +1069,42 @@ int Run(const Options &options) {
     Long64_t currentTop = std::numeric_limits<Long64_t>::min();
     bool currentSelected = false;
     bool haveCurrent = false;
+    int blockedDepth = -1;
 
     auto finalizeCurrent = [&]() {
       if (!haveCurrent || !currentSelected) return;
-      histograms.FillEvent(event.crystalFired, event.bgoFired, event.csiFired,
-                           event.cloverFired, event.cloverEnergy, event.cloverBgo,
-                           event.cloverCsi, config, counters);
+      const bool treatEvent = options.eventTreatment == "adne-last-frame"
+                                  ? event.lastExoKnown
+                                  : event.anyKnownExo;
+      if (treatEvent) {
+        for (const CrystalRecord &record : event.crystalRecords) {
+          histograms.FillCrystal(record.id, record.timeNs, record.energy, record.bgo,
+                                 record.csi, record.enabled, counters);
+        }
+        histograms.FillEvent(event.crystalFired, event.bgoFired, event.csiFired,
+                             event.cloverFired, event.cloverEnergy, event.cloverBgo,
+                             event.cloverCsi, config, counters);
+        ++counters.topEventsTreated;
+
+        int cloverMultiplicity = 0;
+        for (int clover = 0; clover < kClovers; ++clover) {
+          if (config.activeClovers[clover] && event.enabledEccPerClover[clover] > 0) {
+            ++cloverMultiplicity;
+          }
+        }
+        if (options.dither && options.emulateTreatRandom && cloverMultiplicity > 1) {
+          // EN: TExogam2::Treat calls Cal twice for every configured clover pair,
+          //     even when BoolSpec is false and those calibrated TS values are unused.
+          // CN: TExogam2::Treat 对每个已配置 clover 对都调用两次 Cal；即使
+          //     BoolSpec=false、结果没有用于出图，这些调用仍会推进全局随机序列。
+          const Long64_t calls = 2LL * activeCloverCount * activeCloverCount;
+          ConsumeUniformRandoms(random, calls);
+          counters.emulatedTreatRandomCalls += calls;
+        }
+      } else {
+        ++counters.topEventsSkippedByTreatGate;
+        counters.acceptedFramesSkippedByTreatGate += event.crystalRecords.size();
+      }
       ++counters.topEventsProcessed;
       ++selectedEventsTotal;
     };
@@ -1011,6 +1120,7 @@ int Run(const Options &options) {
           break;
         }
         event.Clear();
+        blockedDepth = -1;
         currentTop = branches.topEventIndex;
         haveCurrent = true;
         currentSelected = seenEventsTotal >= options.startEvents;
@@ -1022,15 +1132,36 @@ int Run(const Options &options) {
                   << " events=" << counters.topEventsProcessed
                   << " accepted EXO2=" << counters.acceptedFrames << '\n';
       }
-      if (!currentSelected || !branches.isExo2) continue;
+      if (!currentSelected) continue;
+
+      // EN: GUser::Unpack returns immediately on a zero-TS frame. If that frame is
+      //     a merge frame, its flattened descendants were never visited by ADNE.
+      // CN: GUser::Unpack 遇到 TS=0 会立即返回；若它是 merge frame，则扁平树中
+      //     属于它的后代在 ADNE 中根本不会被递归读取。
+      if (blockedDepth >= 0) {
+        if (branches.depth > blockedDepth) continue;
+        blockedDepth = -1;
+      }
+      if (branches.timestamp == 0) {
+        ++counters.zeroTimestampFrames;
+        blockedDepth = branches.depth;
+        continue;
+      }
+      if (!branches.isExo2) continue;
 
       ++counters.exo2Frames;
+      if (branches.dataSource != 0) {
+        ++counters.nonzeroDataSourceExoFrames;
+        continue;
+      }
       const LutEntry mapped = lut.Find(branches.board, branches.halfBoard);
+      event.lastExoKnown = mapped.clover >= 0;
       if (mapped.clover < 0) {
         ++counters.unknownLutFrames;
         ++unknownLutCounts[{branches.board, branches.halfBoard}];
         continue;
       }
+      event.anyKnownExo = true;
       if (!config.activeClovers[mapped.clover]) {
         ++counters.inactiveCloverFrames;
         continue;
@@ -1052,8 +1183,8 @@ int Run(const Options &options) {
       // CN: 对齐 TExogam2::Cal：能量二次刻度前先加一个随机的半道展宽。随后额外
       //     消耗传统 TDC 与四个 GOCCE segment 刻度所用的随机数，使关闭 PSA 时相邻
       //     frame 的随机序列尽可能与 ADNE 一致。
-      const double energy = CalibrateWithDither(branches.inner6m, calibration.energy[id],
-                                                 random, options.dither);
+      const float energy = static_cast<float>(
+          CalibrateWithDither(branches.inner6m, calibration.energy[id], random, options.dither));
       (void)CalibrateWithDither(branches.rawDeltaT, calibration.legacyTime[id],
                                 random, options.dither);
       for (int segment = 0; segment < 4; ++segment) {
@@ -1061,29 +1192,35 @@ int Run(const Options &options) {
         if (mirror == 0 && options.dither) (void)random.Uniform(1.0);
       }
 
-      double neutronTimeNs = 0.0;
+      float neutronTimeNs = 0.0F;
       if (config.neutronNfs) {
         const double reversed = kTdcChannels - static_cast<double>(branches.rawDeltaT);
         const bool useCorrection = config.crystalTimeCorrection && calibration.nfsTimeValid[id];
         if (useCorrection) {
-          neutronTimeNs = reversed * kDefaultTdcGainNs * calibration.nfsTime[id].gain +
-                          config.gammaFlashOffsetNs + calibration.nfsTime[id].offset;
+          neutronTimeNs = static_cast<float>(
+              reversed * kDefaultTdcGainNs * calibration.nfsTime[id].gain +
+              config.gammaFlashOffsetNs + calibration.nfsTime[id].offset);
         } else {
-          neutronTimeNs = reversed * kDefaultTdcGainNs + config.gammaFlashOffsetNs;
+          neutronTimeNs = static_cast<float>(
+              reversed * kDefaultTdcGainNs + config.gammaFlashOffsetNs);
         }
-        if (branches.rawDeltaT > 60000 || neutronTimeNs <= 0) neutronTimeNs = 0.0;
+        if (branches.rawDeltaT > 60000 || neutronTimeNs <= 0) neutronTimeNs = 0.0F;
       }
 
-      histograms.FillCrystal(id, neutronTimeNs, energy, branches.bgo, branches.csi,
-                             enabled, counters);
+      const float bgo = static_cast<float>(static_cast<UShort_t>(branches.bgo));
+      const float csi = static_cast<float>(static_cast<UShort_t>(branches.csi));
+      event.crystalRecords.push_back({id, neutronTimeNs, energy, bgo, csi, enabled});
       if (enabled && energy > 0) {
+        ++event.enabledEccPerClover[mapped.clover];
         event.crystalFired[id] = true;
-        if (branches.bgo > 0) event.bgoFired[id] = true;
-        if (branches.csi > 0) event.csiFired[id] = true;
+        if (bgo > 0) event.bgoFired[id] = true;
+        if (csi > 0) event.csiFired[id] = true;
         event.cloverFired[mapped.clover] = true;
         event.cloverEnergy[mapped.clover] += energy;
-        event.cloverBgo[mapped.clover] += branches.bgo;
-        event.cloverCsi[mapped.clover] += branches.csi;
+        event.cloverBgo[mapped.clover] += bgo;
+        event.cloverCsi[mapped.clover] += csi;
+      } else if (enabled) {
+        ++event.enabledEccPerClover[mapped.clover];
       }
 
     }
@@ -1119,9 +1256,16 @@ int Run(const Options &options) {
 
   std::cout << "Summary / 汇总:\n"
             << "  top events processed: " << counters.topEventsProcessed << '\n'
+            << "  top events treated: " << counters.topEventsTreated << '\n'
+            << "  top events skipped by Treat gate: "
+            << counters.topEventsSkippedByTreatGate << '\n'
             << "  EXO2 frames read: " << counters.exo2Frames << '\n'
             << "  accepted EXO2 frames: " << counters.acceptedFrames << '\n'
+            << "  accepted frames discarded with skipped events: "
+            << counters.acceptedFramesSkippedByTreatGate << '\n'
             << "  unknown LUT frames: " << counters.unknownLutFrames << '\n'
+            << "  emulated hidden Treat Cal calls: "
+            << counters.emulatedTreatRandomCalls << '\n'
             << "  positive gamma frames: " << counters.positiveEnergyFrames << '\n'
             << "  clover addback fires: " << counters.cloverAddbackFires << '\n'
             << "  no-cut gamma-gamma ordered pairs: " << counters.gammaGammaOrderedPairs << '\n'
