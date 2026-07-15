@@ -40,7 +40,7 @@
 //   "/home/user0/work/IJCLAB/nfs_ana/nfs_ags_no_correction_results/_extracted_ags/th232_18_34to24_34.ags",
 //   "ags_2plus_gated.root",
 //   "6:8,10:13,17:20",
-//   3.0,24.0,20.0,true,-1,4096,0,4096,"offset","fTime")'
+//   3.0,24.0,20.0,true,-1,4096,0,4096,"offset","fTime",8)'
 //
 // neutronWindowsMeV uses low:high pairs separated by commas.
 // neutronWindowsMeV 使用逗号分隔的 low:high 区间。
@@ -70,7 +70,8 @@
 //   [12] gammaMinKeV = 0.0,
 //   [13] gammaMaxKeV = 4096.0,
 //   [14] timeCorrectionMode = "offset",
-//   [15] timeBranchLeaf = "fTime")
+//   [15] timeBranchLeaf = "fTime",
+//   [16] parallelJobs = 1)
 //
 // Only [1] and [2] are required by the C++ signature. The built-in [3] path is
 // machine-specific, so explicitly supplying [3] and [4] is strongly recommended.
@@ -200,6 +201,21 @@
 //     accepts split names ending in this leaf, such as Exogam2.fTime.
 //     要读取并刻度的逐 crystal 时间分支叶名；也兼容 Exogam2.fTime 等 split 名称。
 //
+// [16] parallelJobs : int, default 1
+//     Worker count for ROOT reading, per-crystal calibration, clover addback,
+//     BGO/CSI veto, and the fast-time cut. A single large ROOT file is split into
+//     independent entry ranges, so it can also use several workers. Values <= 0
+//     are clamped to 1.
+//     ROOT 读取、逐 crystal 刻度、clover addback、BGO/CSI veto 和快时间 cut
+//     使用的 worker 数。单个大 ROOT 也会切成多个 entry range；<=0 按 1 处理.
+//
+//     Gate matching, cascade loops, every histogram Fill, and final ROOT writing
+//     remain serial on the main thread. A bounded in-memory event queue avoids
+//     per-worker matrices, temporary ROOT files, and unbounded RAM growth.
+//     Gate、级联循环、所有直方图填充及最终 ROOT 写出仍由主线程串行完成；有界
+//     内存队列避免每个 worker 复制矩阵、产生临时 ROOT 或无限占用内存。
+//     maxEntries keeps its original deterministic global file/entry order.
+//
 // Event reconstruction and cuts / 事件重建与选择顺序
 // -----------------------------------------------------------------------------
 // 1. Reject crystal records with non-positive/non-finite raw energy or time.
@@ -263,6 +279,12 @@
 //   "@/abs/path/input_paths.txt","calibration_summary.tsv","/abs/path/th232.ags",
 //   "ags_many_runs.root")'
 //
+// F. Eight parallel reader/calibration workers / 8 个并行读取与刻度 worker：
+// root -l -b -q 'lsy_nfs/ags_2plus_gated_gamma_gamma_calibrated.C(
+//   "@/abs/path/input_paths.txt","calibration_summary.tsv","/abs/path/th232.ags",
+//   "ags_parallel.root","6:8,10:13,17:20",3,23.396,20,true,-1,
+//   4096,0,4096,"offset","fTime",8)'
+//
 // Shell quoting / Shell 引号：outer single quotes protect the complete ROOT
 // expression; every C++ string argument inside still uses double quotes.
 // 外层单引号保护完整 ROOT 表达式，内部字符串参数仍使用双引号。
@@ -270,20 +292,27 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <climits>
 #include <cmath>
 #include <cctype>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
 #include <dirent.h>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "TBranch.h"
@@ -296,6 +325,7 @@
 #include "TObjArray.h"
 #include "TObjString.h"
 #include "TString.h"
+#include "TROOT.h"
 #include "TSystem.h"
 #include "TTree.h"
 #include "TTreeReader.h"
@@ -1227,6 +1257,338 @@ struct CloverHit {
   int crystalMultiplicity = 0;
 };
 
+// One preflighted file and one independently readable entry range. Branch names
+// are resolved once on the main thread, then copied into immutable worker tasks.
+// 主线程预检文件并解析分支；worker 只读取不可变的 entry range 任务。
+struct AgsInputFilePlan {
+  TString inputPath;
+  const RunCalibration *calibration = nullptr;
+  TString cloverBranch;
+  TString crystalBranch;
+  TString energyBranch;
+  TString timeBranch;
+  TString essCloverBranch;
+  TString essCrystalBranch;
+  TString bgoBranch;
+  TString csiBranch;
+  Long64_t selectedEntries = 0;
+};
+
+struct AgsReadRange {
+  AgsInputFilePlan file;
+  Long64_t firstEntry = 0;
+  Long64_t entryCount = 0;
+};
+
+// Only data required by serial gate/matrix filling crosses the thread boundary.
+// 线程间只传递串行 gate/矩阵阶段真正需要的紧凑数据。
+struct PreparedAgsEvent {
+  std::vector<double> gammaEnergiesKeV;
+  double eventTimeNs = 0.0;
+};
+
+struct AgsPreparationStats {
+  Long64_t inputEntries = 0;
+  Long64_t malformedEntries = 0;
+  Long64_t crystalCalibrationMisses = 0;
+  Long64_t eventsWithAtLeastThreeGammas = 0;
+  bool success = true;
+  std::vector<std::string> errors;
+};
+
+// Bounded producer-consumer queue. Worker threads push calibrated event batches;
+// only the main thread pops them and touches histograms. Bounding the number of
+// batches prevents memory growth when reading is faster than matrix filling.
+// 有界生产者-消费者队列：worker 推送刻度后事件批次，只有主线程填图；队列上限
+// 防止读取速度快于矩阵填充时内存持续增长。
+template <typename EventType>
+class PreparedBatchQueue {
+public:
+  PreparedBatchQueue(std::size_t capacity, std::size_t producerCount)
+      : fCapacity(std::max<std::size_t>(1, capacity)),
+        fActiveProducers(producerCount)
+  {
+  }
+
+  void Push(std::vector<EventType> &&batch)
+  {
+    if (batch.empty()) return;
+    std::unique_lock<std::mutex> lock(fMutex);
+    fNotFull.wait(lock, [this]() { return fBatches.size() < fCapacity; });
+    fBatches.push_back(std::move(batch));
+    lock.unlock();
+    fNotEmpty.notify_one();
+  }
+
+  bool Pop(std::vector<EventType> &batch)
+  {
+    std::unique_lock<std::mutex> lock(fMutex);
+    fNotEmpty.wait(lock, [this]() {
+      return !fBatches.empty() || fActiveProducers == 0;
+    });
+    if (fBatches.empty()) return false;
+    batch = std::move(fBatches.front());
+    fBatches.pop_front();
+    lock.unlock();
+    fNotFull.notify_one();
+    return true;
+  }
+
+  void ProducerDone()
+  {
+    {
+      std::lock_guard<std::mutex> lock(fMutex);
+      if (fActiveProducers > 0) --fActiveProducers;
+    }
+    fNotEmpty.notify_all();
+  }
+
+private:
+  std::size_t fCapacity = 1;
+  std::size_t fActiveProducers = 0;
+  std::deque<std::vector<EventType>> fBatches;
+  std::mutex fMutex;
+  std::condition_variable fNotEmpty;
+  std::condition_variable fNotFull;
+};
+
+constexpr std::size_t kPreparedAgsBatchSize = 1024;
+
+// Read and calibrate one entry range. This function never touches an analysis
+// histogram or output ROOT file and is therefore safe to run in multiple workers.
+// 读取并刻度一个 entry range；本函数不接触任何最终直方图或输出 ROOT 文件。
+void PrepareAgsRange(const AgsReadRange &range, bool useBgoCsiVeto,
+                     double tCutNs, const TString &timeMode,
+                     AgsPreparationStats &stats,
+                     std::vector<PreparedAgsEvent> &batch,
+                     PreparedBatchQueue<PreparedAgsEvent> &queue)
+{
+  TFile input(range.file.inputPath, "READ");
+  if (!input.IsOpen() || input.IsZombie()) {
+    stats.success = false;
+    stats.errors.push_back(
+        TString::Format("Cannot reopen input ROOT / 无法重新打开输入 ROOT: %s",
+                        range.file.inputPath.Data()).Data());
+    return;
+  }
+  TTree *tree = dynamic_cast<TTree *>(input.Get("TreeMaster"));
+  if (!tree) {
+    stats.success = false;
+    stats.errors.push_back(
+        TString::Format("TreeMaster disappeared / TreeMaster 不存在: %s",
+                        range.file.inputPath.Data()).Data());
+    return;
+  }
+
+  TTreeReader reader(tree);
+  reader.SetEntriesRange(range.firstEntry,
+                         range.firstEntry + range.entryCount);
+  TTreeReaderArray<UShort_t> clovers(reader, range.file.cloverBranch.Data());
+  TTreeReaderArray<UShort_t> crystals(reader, range.file.crystalBranch.Data());
+  TTreeReaderArray<float> rawEnergies(reader, range.file.energyBranch.Data());
+  TTreeReaderArray<float> rawTimes(reader, range.file.timeBranch.Data());
+  std::unique_ptr<TTreeReaderArray<UShort_t>> essClovers;
+  std::unique_ptr<TTreeReaderArray<UShort_t>> essCrystals;
+  std::unique_ptr<TTreeReaderArray<UShort_t>> bgo;
+  std::unique_ptr<TTreeReaderArray<UShort_t>> csi;
+  if (useBgoCsiVeto) {
+    essClovers.reset(new TTreeReaderArray<UShort_t>(
+        reader, range.file.essCloverBranch.Data()));
+    essCrystals.reset(new TTreeReaderArray<UShort_t>(
+        reader, range.file.essCrystalBranch.Data()));
+    bgo.reset(new TTreeReaderArray<UShort_t>(reader,
+                                             range.file.bgoBranch.Data()));
+    csi.reset(new TTreeReaderArray<UShort_t>(reader,
+                                             range.file.csiBranch.Data()));
+  }
+
+  while (reader.Next()) {
+    ++stats.inputEntries;
+    const std::size_t fireCount =
+        static_cast<std::size_t>(rawEnergies.GetSize());
+    if (clovers.GetSize() != rawEnergies.GetSize() ||
+        crystals.GetSize() != rawEnergies.GetSize() ||
+        rawTimes.GetSize() != rawEnergies.GetSize()) {
+      ++stats.malformedEntries;
+      continue;
+    }
+
+    std::array<CloverHit, kNClover> cloverHits;
+    if (useBgoCsiVeto) {
+      const std::size_t vetoCount = std::min(
+          {static_cast<std::size_t>(essClovers->GetSize()),
+           static_cast<std::size_t>(essCrystals->GetSize()),
+           static_cast<std::size_t>(bgo->GetSize()),
+           static_cast<std::size_t>(csi->GetSize())});
+      for (std::size_t index = 0; index < vetoCount; ++index) {
+        const int clover = (*essClovers)[index];
+        if (clover < 0 || clover >= kNClover) continue;
+        if ((*bgo)[index] > 0) cloverHits[clover].bgo = true;
+        if ((*csi)[index] > 0) cloverHits[clover].csi = true;
+      }
+    }
+
+    for (std::size_t index = 0; index < fireCount; ++index) {
+      const int clover = clovers[index];
+      const int crystal = crystals[index];
+      if (clover < 0 || clover >= kNClover || crystal < 0 ||
+          crystal >= kNCrystalPerClover) continue;
+      const double rawEnergy = rawEnergies[index];
+      const double rawTime = rawTimes[index];
+      if (rawEnergy <= 0.0 || rawTime <= 0.0 ||
+          !std::isfinite(rawEnergy) || !std::isfinite(rawTime)) continue;
+
+      const int detector = clover * kNCrystalPerClover + crystal;
+      const CrystalCalibration &crystalCal =
+          range.file.calibration->crystal[detector];
+      if (!crystalCal.hasEnergyOffset || !crystalCal.hasEnergyGain ||
+          !HasTimeCalibration(crystalCal, timeMode)) {
+        ++stats.crystalCalibrationMisses;
+        continue;
+      }
+      const double energy =
+          crystalCal.energyOffset + crystalCal.energyGain * rawEnergy;
+      const double time = ApplyTimeCalibration(rawTime, crystalCal, timeMode);
+      if (energy <= 0.0 || time <= 0.0 || !std::isfinite(energy) ||
+          !std::isfinite(time)) continue;
+
+      CloverHit &hit = cloverHits[clover];
+      hit.energyKeV += energy;
+      ++hit.crystalMultiplicity;
+      if (energy > hit.bestCrystalEnergyKeV) {
+        hit.bestCrystalEnergyKeV = energy;
+        hit.timeNs = time;
+      }
+    }
+
+    PreparedAgsEvent event;
+    event.eventTimeNs = std::numeric_limits<double>::infinity();
+    for (const auto &hit : cloverHits) {
+      if (hit.crystalMultiplicity <= 0 || hit.energyKeV <= 0.0 ||
+          !std::isfinite(hit.timeNs)) continue;
+      if (useBgoCsiVeto && (hit.bgo || hit.csi)) continue;
+      if (hit.timeNs < tCutNs) continue;
+      event.gammaEnergiesKeV.push_back(hit.energyKeV);
+      event.eventTimeNs = std::min(event.eventTimeNs, hit.timeNs);
+    }
+
+    if (event.gammaEnergiesKeV.size() < 3 ||
+        !std::isfinite(event.eventTimeNs)) continue;
+    ++stats.eventsWithAtLeastThreeGammas;
+    batch.push_back(std::move(event));
+    if (batch.size() >= kPreparedAgsBatchSize) {
+      queue.Push(std::move(batch));
+      batch.clear();
+      batch.reserve(kPreparedAgsBatchSize);
+    }
+  }
+}
+
+struct AgsParallelPlan {
+  std::vector<AgsReadRange> ranges;
+  Long64_t processedFiles = 0;
+  Long64_t filesWithoutCalibration = 0;
+  Long64_t selectedEntries = 0;
+};
+
+// Serial preflight is metadata-only: validate each input, resolve branch names,
+// preserve the deterministic global maxEntries order, then split selected entries
+// into several ranges per requested worker for load balancing.
+// 串行预检只读元数据：检查文件/分支、按原顺序分配全局 maxEntries，再把选中的
+// entries 切成多于 worker 数量的 range，以便大文件也能并行且负载均衡。
+AgsParallelPlan BuildAgsParallelPlan(
+    const std::vector<TString> &inputs,
+    const CalibrationDatabase &calibration,
+    bool useBgoCsiVeto, const char *timeBranchLeaf,
+    Long64_t maxEntries, int requestedJobs)
+{
+  AgsParallelPlan result;
+  std::vector<AgsInputFilePlan> files;
+  Long64_t remaining = maxEntries;
+
+  for (const auto &inputPath : inputs) {
+    if (maxEntries > 0 && remaining <= 0) break;
+    TFile input(inputPath, "READ");
+    if (!input.IsOpen() || input.IsZombie()) {
+      std::cerr << "Cannot open input ROOT / 无法打开输入 ROOT: "
+                << inputPath << std::endl;
+      continue;
+    }
+    TTree *tree = dynamic_cast<TTree *>(input.Get("TreeMaster"));
+    if (!tree) {
+      std::cerr << "TreeMaster is missing / 缺少 TreeMaster: " << inputPath
+                << std::endl;
+      continue;
+    }
+
+    const RunCalibration *runCalibration =
+        FindRunCalibration(calibration, inputPath);
+    if (!runCalibration) {
+      std::cerr << "Skip file without matching calibration / 跳过无对应刻度文件: "
+                << inputPath << std::endl;
+      ++result.filesWithoutCalibration;
+      continue;
+    }
+
+    AgsInputFilePlan plan;
+    plan.inputPath = inputPath;
+    plan.calibration = runCalibration;
+    plan.cloverBranch = ResolveBranch(tree, "fEXO_ECC_E_Clover");
+    plan.crystalBranch = ResolveBranch(tree, "fEXO_ECC_E_Cristal");
+    plan.energyBranch = ResolveBranch(tree, "fEXO_ECC_E_Energy");
+    plan.timeBranch = ResolveBranch(
+        tree, timeBranchLeaf && TString(timeBranchLeaf).Length() > 0
+                  ? timeBranchLeaf
+                  : "fTime");
+    plan.essCloverBranch = ResolveBranch(tree, "fEXO_ESS_Clover");
+    plan.essCrystalBranch = ResolveBranch(tree, "fEXO_ESS_Cristal");
+    plan.bgoBranch = ResolveBranch(tree, "fEXO_ESS_BGO");
+    plan.csiBranch = ResolveBranch(tree, "fEXO_ESS_CSI");
+
+    if (plan.cloverBranch.IsNull() || plan.crystalBranch.IsNull() ||
+        plan.energyBranch.IsNull() || plan.timeBranch.IsNull()) {
+      std::cerr << "Required crystal branches are missing / 缺少必要 crystal 分支: "
+                << inputPath << std::endl;
+      continue;
+    }
+    if (useBgoCsiVeto &&
+        (plan.essCloverBranch.IsNull() || plan.essCrystalBranch.IsNull() ||
+         plan.bgoBranch.IsNull() || plan.csiBranch.IsNull())) {
+      std::cerr << "BGO/CSI veto branches are missing / 缺少 BGO/CSI veto 分支: "
+                << inputPath << std::endl;
+      continue;
+    }
+
+    ++result.processedFiles;
+    const Long64_t availableEntries = tree->GetEntries();
+    plan.selectedEntries = maxEntries > 0
+                               ? std::min(availableEntries, remaining)
+                               : availableEntries;
+    if (maxEntries > 0) remaining -= plan.selectedEntries;
+    result.selectedEntries += plan.selectedEntries;
+    files.push_back(plan);
+  }
+
+  if (result.selectedEntries <= 0) return result;
+  const Long64_t targetChunks =
+      std::max<Long64_t>(1, static_cast<Long64_t>(std::max(1, requestedJobs)) * 4);
+  const Long64_t chunkEntries =
+      std::max<Long64_t>(1, (result.selectedEntries + targetChunks - 1) /
+                                  targetChunks);
+  for (const auto &file : files) {
+    for (Long64_t first = 0; first < file.selectedEntries;
+         first += chunkEntries) {
+      AgsReadRange range;
+      range.file = file;
+      range.firstEntry = first;
+      range.entryCount =
+          std::min(chunkEntries, file.selectedEntries - first);
+      result.ranges.push_back(range);
+    }
+  }
+  return result;
+}
+
 void FillResidualPairs(TH2I *matrix,
                        const std::vector<double> &energies,
                        std::size_t removedIndex,
@@ -1404,7 +1766,8 @@ void ags_2plus_gated_gamma_gamma_calibrated(
     double gammaMinKeV = 0.0,
     double gammaMaxKeV = 4096.0,
     const char *timeCorrectionMode = "offset",
-    const char *timeBranchLeaf = "fTime")
+    const char *timeBranchLeaf = "fTime",
+    int parallelJobs = 1)
 {
   using namespace ags_2plus_gate_detail;
 
@@ -1530,160 +1893,70 @@ void ags_2plus_gated_gamma_gamma_calibrated(
   const double halfGateWidthKeV = 0.5 * (gateWidthKeV - 1.0);
   const TString timeMode(timeCorrectionMode ? timeCorrectionMode : "offset");
 
-  for (const auto &inputPath : inputs) {
-    if (maxEntries > 0 && totalEntries >= maxEntries) break;
-    TFile input(inputPath, "READ");
-    if (!input.IsOpen() || input.IsZombie()) {
-      std::cerr << "Cannot open input ROOT / 无法打开输入 ROOT: "
-                << inputPath << std::endl;
-      continue;
-    }
-    TTree *tree = dynamic_cast<TTree *>(input.Get("TreeMaster"));
-    if (!tree) {
-      std::cerr << "TreeMaster is missing / 缺少 TreeMaster: " << inputPath
-                << std::endl;
-      continue;
-    }
+  const int requestedParallelJobs = std::max(1, parallelJobs);
+  AgsParallelPlan preparationPlan = BuildAgsParallelPlan(
+      inputs, calibration, useBgoCsiVeto, timeBranchLeaf, maxEntries,
+      requestedParallelJobs);
+  processedFiles = preparationPlan.processedFiles;
+  filesWithoutCalibration = preparationPlan.filesWithoutCalibration;
 
-    const RunCalibration *runCalibration =
-        FindRunCalibration(calibration, inputPath);
-    if (!runCalibration) {
-      std::cerr << "Skip file without matching calibration / 跳过无对应刻度文件: "
-                << inputPath << std::endl;
-      ++filesWithoutCalibration;
-      continue;
-    }
+  const int effectiveParallelJobs =
+      preparationPlan.ranges.empty()
+          ? 0
+          : std::min<int>(requestedParallelJobs,
+                          static_cast<int>(preparationPlan.ranges.size()));
 
-    const TString cloverBranch = ResolveBranch(tree, "fEXO_ECC_E_Clover");
-    const TString crystalBranch = ResolveBranch(tree, "fEXO_ECC_E_Cristal");
-    const TString energyBranch = ResolveBranch(tree, "fEXO_ECC_E_Energy");
-    const TString timeBranch = ResolveBranch(
-        tree, timeBranchLeaf && TString(timeBranchLeaf).Length() > 0
-                  ? timeBranchLeaf
-                  : "fTime");
-    const TString essCloverBranch = ResolveBranch(tree, "fEXO_ESS_Clover");
-    const TString essCrystalBranch = ResolveBranch(tree, "fEXO_ESS_Cristal");
-    const TString bgoBranch = ResolveBranch(tree, "fEXO_ESS_BGO");
-    const TString csiBranch = ResolveBranch(tree, "fEXO_ESS_CSI");
+  // ROOT protects its global bookkeeping while each worker opens an independent
+  // TFile/TTreeReader. Final histograms remain exclusively on the main thread.
+  // ROOT 只负责保护全局对象；每个 worker 独立打开文件，最终直方图只在主线程填充。
+  ROOT::EnableThreadSafety();
+  PreparedBatchQueue<PreparedAgsEvent> preparedQueue(
+      std::max<std::size_t>(
+          2, static_cast<std::size_t>(std::max(1, effectiveParallelJobs)) * 2),
+      static_cast<std::size_t>(effectiveParallelJobs));
+  std::atomic<std::size_t> nextRange(0);
+  std::vector<AgsPreparationStats> workerStats(effectiveParallelJobs);
+  std::vector<std::thread> workers;
+  workers.reserve(effectiveParallelJobs);
 
-    if (cloverBranch.IsNull() || crystalBranch.IsNull() ||
-        energyBranch.IsNull() || timeBranch.IsNull()) {
-      std::cerr << "Required crystal branches are missing / 缺少必要 crystal 分支: "
-                << inputPath << std::endl;
-      continue;
-    }
-    if (useBgoCsiVeto &&
-        (essCloverBranch.IsNull() || essCrystalBranch.IsNull() ||
-         bgoBranch.IsNull() || csiBranch.IsNull())) {
-      std::cerr << "BGO/CSI veto branches are missing / 缺少 BGO/CSI veto 分支: "
-                << inputPath << std::endl;
-      continue;
-    }
-
-    ++processedFiles;
-    TTreeReader reader(tree);
-    TTreeReaderArray<UShort_t> clovers(reader, cloverBranch.Data());
-    TTreeReaderArray<UShort_t> crystals(reader, crystalBranch.Data());
-    TTreeReaderArray<float> rawEnergies(reader, energyBranch.Data());
-    TTreeReaderArray<float> rawTimes(reader, timeBranch.Data());
-    std::unique_ptr<TTreeReaderArray<UShort_t>> essClovers;
-    std::unique_ptr<TTreeReaderArray<UShort_t>> essCrystals;
-    std::unique_ptr<TTreeReaderArray<UShort_t>> bgo;
-    std::unique_ptr<TTreeReaderArray<UShort_t>> csi;
-    if (useBgoCsiVeto) {
-      essClovers.reset(
-          new TTreeReaderArray<UShort_t>(reader, essCloverBranch.Data()));
-      essCrystals.reset(
-          new TTreeReaderArray<UShort_t>(reader, essCrystalBranch.Data()));
-      bgo.reset(new TTreeReaderArray<UShort_t>(reader, bgoBranch.Data()));
-      csi.reset(new TTreeReaderArray<UShort_t>(reader, csiBranch.Data()));
-    }
-
-    while (reader.Next()) {
-      if (maxEntries > 0 && totalEntries >= maxEntries) break;
-      ++totalEntries;
-
-      const std::size_t fireCount =
-          static_cast<std::size_t>(rawEnergies.GetSize());
-      if (clovers.GetSize() != rawEnergies.GetSize() ||
-          crystals.GetSize() != rawEnergies.GetSize() ||
-          rawTimes.GetSize() != rawEnergies.GetSize()) {
-        ++malformedEntries;
-        continue;
+  for (int worker = 0; worker < effectiveParallelJobs; ++worker) {
+    workers.emplace_back([&, worker]() {
+      std::vector<PreparedAgsEvent> batch;
+      batch.reserve(kPreparedAgsBatchSize);
+      try {
+        while (true) {
+          const std::size_t rangeIndex = nextRange.fetch_add(1);
+          if (rangeIndex >= preparationPlan.ranges.size()) break;
+          PrepareAgsRange(preparationPlan.ranges[rangeIndex], useBgoCsiVeto,
+                          tCutNs, timeMode, workerStats[worker], batch,
+                          preparedQueue);
+          if (!workerStats[worker].success) break;
+        }
+        if (!batch.empty()) preparedQueue.Push(std::move(batch));
+      } catch (const std::exception &error) {
+        workerStats[worker].success = false;
+        workerStats[worker].errors.push_back(
+            std::string("Parallel preparation exception / 并行准备异常: ") +
+            error.what());
+      } catch (...) {
+        workerStats[worker].success = false;
+        workerStats[worker].errors.push_back(
+            "Unknown parallel preparation exception / 未知并行准备异常");
       }
+      preparedQueue.ProducerDone();
+    });
+  }
 
-      std::array<CloverHit, kNClover> cloverHits;
-      if (useBgoCsiVeto) {
-        const std::size_t vetoCount = std::min(
-            {static_cast<std::size_t>(essClovers->GetSize()),
-             static_cast<std::size_t>(essCrystals->GetSize()),
-             static_cast<std::size_t>(bgo->GetSize()),
-             static_cast<std::size_t>(csi->GetSize())});
-        for (std::size_t i = 0; i < vetoCount; ++i) {
-          const int clover = (*essClovers)[i];
-          if (clover < 0 || clover >= kNClover) continue;
-          if ((*bgo)[i] > 0) cloverHits[clover].bgo = true;
-          if ((*csi)[i] > 0) cloverHits[clover].csi = true;
-        }
-      }
-
-      for (std::size_t i = 0; i < fireCount; ++i) {
-        const int clover = clovers[i];
-        const int crystal = crystals[i];
-        if (clover < 0 || clover >= kNClover ||
-            crystal < 0 || crystal >= kNCrystalPerClover) {
-          continue;
-        }
-        const int detector = clover * kNCrystalPerClover + crystal;
-        const double rawEnergy = rawEnergies[i];
-        const double rawTime = rawTimes[i];
-        if (rawEnergy <= 0.0 || rawTime <= 0.0 ||
-            !std::isfinite(rawEnergy) || !std::isfinite(rawTime)) {
-          continue;
-        }
-
-        const CrystalCalibration &crystalCal =
-            runCalibration->crystal[detector];
-        if (!crystalCal.hasEnergyOffset || !crystalCal.hasEnergyGain ||
-            !HasTimeCalibration(crystalCal, timeMode)) {
-          ++crystalCalibrationMisses;
-          continue;
-        }
-        const double energy =
-            crystalCal.energyOffset + crystalCal.energyGain * rawEnergy;
-        const double time =
-            ApplyTimeCalibration(rawTime, crystalCal, timeMode);
-        if (energy <= 0.0 || time <= 0.0 || !std::isfinite(energy) ||
-            !std::isfinite(time)) {
-          continue;
-        }
-
-        CloverHit &hit = cloverHits[clover];
-        hit.energyKeV += energy;
-        ++hit.crystalMultiplicity;
-        if (energy > hit.bestCrystalEnergyKeV) {
-          hit.bestCrystalEnergyKeV = energy;
-          hit.timeNs = time;
-        }
-      }
-
-      std::vector<double> gammaEnergies;
-      double eventTimeNs = std::numeric_limits<double>::infinity();
-      for (const auto &hit : cloverHits) {
-        if (hit.crystalMultiplicity <= 0 || hit.energyKeV <= 0.0 ||
-            !std::isfinite(hit.timeNs)) {
-          continue;
-        }
-        if (useBgoCsiVeto && (hit.bgo || hit.csi)) continue;
-        if (hit.timeNs < tCutNs) continue;
-        gammaEnergies.push_back(hit.energyKeV);
-        eventTimeNs = std::min(eventTimeNs, hit.timeNs);
-      }
-
-      if (gammaEnergies.size() < 3 || !std::isfinite(eventTimeNs)) continue;
-      ++eventsWithAtLeastThreeGammas;
+  // Workers only prepare compact calibrated events. The main thread consumes
+  // batches and performs all gate tests and ROOT histogram fills serially.
+  // worker 只准备紧凑刻度事件；主线程串行执行全部 gate 判断及 ROOT 填图。
+  std::vector<PreparedAgsEvent> preparedBatch;
+  while (preparedQueue.Pop(preparedBatch)) {
+    for (const auto &preparedEvent : preparedBatch) {
+      const std::vector<double> &gammaEnergies =
+          preparedEvent.gammaEnergiesKeV;
       const double eventNeutronEnergyMeV =
-          ToFNsToEnergyMeV(eventTimeNs, nfsDistanceMeter);
+          ToFNsToEnergyMeV(preparedEvent.eventTimeNs, nfsDistanceMeter);
       if (!std::isfinite(eventNeutronEnergyMeV)) continue;
 
       // ---------------------------------------------------------------------
@@ -1816,9 +2089,28 @@ void ags_2plus_gated_gamma_gamma_calibrated(
         if (windowAcceptedInEvent[i]) ++windows[i].acceptedEvents;
       }
     }
-    input.Close();
+    preparedBatch.clear();
   }
 
+  for (auto &worker : workers) worker.join();
+
+  bool preparationSucceeded = true;
+  for (const auto &stats : workerStats) {
+    totalEntries += stats.inputEntries;
+    malformedEntries += stats.malformedEntries;
+    crystalCalibrationMisses += stats.crystalCalibrationMisses;
+    eventsWithAtLeastThreeGammas += stats.eventsWithAtLeastThreeGammas;
+    if (!stats.success) preparationSucceeded = false;
+    for (const auto &error : stats.errors) {
+      std::cerr << error << std::endl;
+    }
+  }
+  if (!preparationSucceeded) {
+    std::cerr << "Parallel input preparation failed; no output was written / "
+                 "并行输入准备失败，未写出结果"
+              << std::endl;
+    return;
+  }
   TFile output(outputFile, "RECREATE");
   if (!output.IsOpen() || output.IsZombie()) {
     std::cerr << "Cannot create output ROOT / 无法创建输出 ROOT: "
@@ -1833,11 +2125,12 @@ void ags_2plus_gated_gamma_gamma_calibrated(
 
   metadataDirectory->cd();
   const TString configTitle = TString::Format(
-          "inputs=%s; calibration=%s; ags=%s; neutron_windows_MeV=%s; gate_width_1keV_channels=%.9g; gate_half_width_keV=%.9g; distance_m=%.9g; time_fwhm_ns=%.9g; t_cut_ns=%.9g; bgo_csi_veto=%d; gamma_bins=%d; gamma_range_keV=%.9g:%.9g; time_mode=%s; time_branch=%s",
+          "inputs=%s; calibration=%s; ags=%s; neutron_windows_MeV=%s; gate_width_1keV_channels=%.9g; gate_half_width_keV=%.9g; distance_m=%.9g; time_fwhm_ns=%.9g; t_cut_ns=%.9g; bgo_csi_veto=%d; gamma_bins=%d; gamma_range_keV=%.9g:%.9g; time_mode=%s; time_branch=%s; parallel_jobs_requested=%d; parallel_jobs_used=%d; parallel_ranges=%zu",
           inputFiles, calibrationSummary, agsFile, neutronWindowsMeV,
           gateWidthKeV, halfGateWidthKeV, nfsDistanceMeter, timeFwhmNs, tCutNs,
           useBgoCsiVeto ? 1 : 0, gammaBins, gammaMinKeV, gammaMaxKeV,
-          timeCorrectionMode, timeBranchLeaf);
+          timeCorrectionMode, timeBranchLeaf, requestedParallelJobs,
+          effectiveParallelJobs, preparationPlan.ranges.size());
   TNamed config("AGS2GateAnalysisConfig", configTitle.Data());
   config.Write();
   WriteTransitionTree(ags);
@@ -1999,6 +2292,8 @@ void ags_2plus_gated_gamma_gamma_calibrated(
   std::cout << "4+ -> 2+ -> 0+ cascade pairs: " << cascadePairs.size() << std::endl;
   std::cout << "Processed files / 处理文件: " << processedFiles << std::endl;
   std::cout << "Input entries / 输入 event: " << totalEntries << std::endl;
+  std::cout << "Parallel workers / 并行 worker: " << effectiveParallelJobs
+            << " (ranges=" << preparationPlan.ranges.size() << ")" << std::endl;
   std::cout << "Events matching any gate / 命中任一 gate: "
             << eventsMatchingAnyGate << std::endl;
   std::cout << "Accepted events / 通过 event: " << acceptedEvents << std::endl;
