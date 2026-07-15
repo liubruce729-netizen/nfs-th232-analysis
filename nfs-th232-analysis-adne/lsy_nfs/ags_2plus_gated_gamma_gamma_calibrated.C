@@ -3,7 +3,8 @@
 //
 // What this macro does / 本宏完成的处理
 // -----------------------------------------------------------------------------
-// 1. Read one ROOT file, comma-separated ROOT files, or an @file-list.
+// 1. Expand one ROOT file/directory, comma-separated mixtures, or an @path-list;
+//    directories are searched recursively for numeric NFS run ROOT files.
 // 2. Match every input run to the per-crystal energy/time coefficients in the
 //    calibration summary produced by calibrate_nfs_crystals.sh.
 // 3. Rebuild clover addback after crystal calibration. The time of a clover is
@@ -19,7 +20,8 @@
 //    same intermediate 2+ level. Gate both cascade gammas and fill every other
 //    gamma into a dedicated one-dimensional spectrum named "E4to2-E2to0".
 //
-// 1. 输入可以是一个 ROOT、逗号分隔的多个 ROOT，或 @文件列表。
+// 1. 输入可以是单 ROOT/目录、逗号分隔的文件与目录，或 @路径列表；目录会递归
+//    查找数字编号的 NFS run ROOT 文件。
 // 2. 按 run 文件名读取 calibrate_nfs_crystals.sh 生成的逐 crystal 能量/时间刻度。
 // 3. 刻度后重建 clover addback；clover 时间取最高能量 crystal 的时间。默认执行
 //    BGO/CSI veto，并去掉快于 50 MeV 中子允许时间范围的 clover fire。
@@ -85,16 +87,27 @@
 // Parameter details / 参数详解
 // -----------------------------------------------------------------------------
 // [1] inputFiles : const char*
-//     Input TreeMaster ROOT files. Three forms are accepted:
-//       a) one file:  "/data/mult3_nfs_run_12_r0.root"
-//       b) CSV list:  "a.root,b.root,c.root"
-//       c) text list: "@mult3_files.txt"
-//     An @list contains one ROOT path per line. Empty lines and lines beginning
-//     with # or // are ignored. Relative paths are resolved relative to the list
-//     file when they are not found from the current directory.
-//     输入 TreeMaster ROOT。支持单文件、逗号分隔文件和 @文本列表。@列表每行
-//     一个 ROOT 路径；空行、# 和 // 开头行忽略。找不到相对路径时，会相对列表
-//     文件所在目录解析。maxEntries 是所有输入文件合计值，不是每个文件各自值。
+//     File and directory specifications containing TreeMaster. Accepted forms:
+//       a) one file:       "/data/run12/nfs_run_12_r0.root"
+//       b) one directory:  "/data/run12"
+//       c) CSV mixture:    "/data/run12,/data/run13/nfs_run_13_r0.root"
+//       d) path list:      "@input_paths.txt"
+//     Every non-comment line of an @list may be either a file or a directory.
+//     Empty lines and lines starting with # or // are ignored. Relative entries
+//     are tried from ROOT's current directory first, then from the list-file
+//     directory. A listed directory is searched recursively.
+//
+//     Recursive discovery accepts exactly these numeric forms:
+//       nfs_run_1_r0.root ... nfs_run_999_r999.root
+//       mult3_nfs_run_1_r0.root ... mult3_nfs_run_999_r999.root
+//     The underscore after "run" may be omitted. Both numbers contain 1-3 digits.
+//     Explicitly named files remain accepted even when their basename is legacy
+//     or non-numeric. Results are numerically sorted by run and part.
+//
+//     输入可为单文件、单目录、CSV 文件/目录混合项，或 @路径列表；@列表每个非
+//     注释行均可为文件或目录。目录递归匹配 nfs_run_<1-3位>_r<1-3位>.root
+//     及其 mult3_ 版本。显式指定的文件仍兼容旧名称。相对路径先按 ROOT 当前
+//     目录查找，不存在时再相对列表目录解析。maxEntries 是全部输入合计值。
 //
 // [2] calibrationSummary : const char*
 //     calibration_summary.tsv produced by calibrate_nfs_crystals.sh, or one
@@ -104,8 +117,12 @@
 //     A file with no matching run calibration is skipped; identity calibration
 //     is NOT silently substituted. Required values are per-crystal
 //     energy_offset, energy_gain, and the requested time correction values.
-//     刻度汇总由 calibrate_nfs_crystals.sh 产生。按文件名逐 run 匹配，并自动去掉
-//     mult3_ 前缀。没有匹配刻度的输入文件会被跳过，不会偷偷采用单位刻度。
+//     Duplicate copies with the same normalized basename are processed once. If
+//     both nfs_run... and mult3_nfs_run... are discovered, the full nfs_run...
+//     file is selected and the mult3 subset is ignored to prevent double counts.
+//     刻度汇总由 calibrate_nfs_crystals.sh 产生。按文件名逐 run 匹配并去掉
+//     mult3_ 前缀。无匹配刻度的文件跳过。同一标准文件名只处理一次；同时找到
+//     普通 nfs 文件与 mult3 子集时只选普通文件，防止同一事件被重复统计。
 //
 // [3] agsFile : const char*
 //     ASCII GLS/AGS level-scheme file. Its Level, Band, and Gamma sections are
@@ -232,6 +249,20 @@
 //   "quick.root","6:8,10:13,17:20",3,23.396,20,true,100000,
 //   2048,0,4096,"offset","fTime")'
 //
+// D. Recursively scan one directory / 递归遍历一个目录：
+// root -l -b -q 'lsy_nfs/ags_2plus_gated_gamma_gamma_calibrated.C(
+//   "/data/analysed/run12","calibration_summary.tsv","/abs/path/th232.ags",
+//   "ags_run12.root")'
+//
+// E. Read a list of directories and/or files / 读取文件与目录路径列表：
+// input_paths.txt may contain / input_paths.txt 每行可以写：
+//   /data/analysed/run12
+//   /data/analysed/run13
+//   /data/analysed/special/nfs_run_14_r0.root
+// root -l -b -q 'lsy_nfs/ags_2plus_gated_gamma_gamma_calibrated.C(
+//   "@/abs/path/input_paths.txt","calibration_summary.tsv","/abs/path/th232.ags",
+//   "ags_many_runs.root")'
+//
 // Shell quoting / Shell 引号：outer single quotes protect the complete ROOT
 // expression; every C++ string argument inside still uses double quotes.
 // 外层单引号保护完整 ROOT 表达式，内部字符串参数仍使用双引号。
@@ -239,16 +270,20 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
+#include <dirent.h>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 
 #include "TBranch.h"
@@ -339,14 +374,99 @@ TString NormalizeRunKey(TString path)
   return path;
 }
 
+// Parsed identity of an automatically discoverable NFS run file.
+// 自动遍历时允许的 NFS run 文件名结构。
+struct NfsRunFileIdentity {
+  bool valid = false;
+  bool mult3 = false;
+  int runNumber = -1;
+  int partNumber = -1;
+  TString normalizedName;
+};
+
+bool ParseOneToThreeDigits(const std::string &text, std::size_t &position,
+                           int &value)
+{
+  const std::size_t begin = position;
+  while (position < text.size() &&
+         std::isdigit(static_cast<unsigned char>(text[position]))) {
+    ++position;
+  }
+  const std::size_t count = position - begin;
+  if (count < 1 || count > 3) return false;
+  value = std::atoi(text.substr(begin, count).c_str());
+  return true;
+}
+
+// Directory discovery accepts the actual ADNE names
+//   nfs_run_8_r0.root, nfs_run_100_r12.root
+// and their selected-tree equivalents
+//   mult3_nfs_run_8_r0.root.
+// The underscore after "run" is optional for compatibility, while both numeric
+// fields are deliberately limited to one through three digits.
+// 目录遍历识别普通 nfs 文件和 mult3_ 文件；run 后下划线可省略，run/part 编号
+// 均严格限制为 1 到 3 位数字。
+NfsRunFileIdentity ParseNfsRunFileIdentity(const TString &path)
+{
+  NfsRunFileIdentity identity;
+  std::string name = BaseName(path).Data();
+  const std::string mult3Prefix = "mult3_";
+  if (name.compare(0, mult3Prefix.size(), mult3Prefix) == 0) {
+    identity.mult3 = true;
+    name.erase(0, mult3Prefix.size());
+  }
+  const std::string prefix = "nfs_run";
+  if (name.compare(0, prefix.size(), prefix) != 0) return identity;
+
+  std::size_t position = prefix.size();
+  if (position < name.size() && name[position] == '_') ++position;
+  if (!ParseOneToThreeDigits(name, position, identity.runNumber)) {
+    return NfsRunFileIdentity();
+  }
+  if (name.compare(position, 2, "_r") != 0) return NfsRunFileIdentity();
+  position += 2;
+  if (!ParseOneToThreeDigits(name, position, identity.partNumber)) {
+    return NfsRunFileIdentity();
+  }
+  if (name.compare(position, 5, ".root") != 0 ||
+      position + 5 != name.size()) {
+    return NfsRunFileIdentity();
+  }
+
+  identity.valid = true;
+  identity.normalizedName = name.c_str();
+  return identity;
+}
+
+TString CanonicalInputPath(TString path)
+{
+  path = path.Strip(TString::kBoth);
+  if (path.IsNull() || path.Contains("://")) return path;
+  gSystem->ExpandPathName(path);
+  char resolved[PATH_MAX];
+  if (::realpath(path.Data(), resolved)) return TString(resolved);
+  return path;
+}
+
+bool ReadPathStatus(const TString &path, struct stat &status)
+{
+  if (path.Contains("://")) return false;
+  return ::stat(path.Data(), &status) == 0;
+}
+
+// Read raw file-or-directory specifications from @list. For backward
+// compatibility, an existing path relative to ROOT's current directory wins;
+// otherwise a relative path is resolved from the list-file directory.
+// @list 每行既可以是文件，也可以是目录。为兼容旧列表，先尝试 ROOT 当前目录；
+// 若不存在，再相对列表文件所在目录解析。
 std::vector<TString> ReadInputList(const TString &listPath)
 {
-  std::vector<TString> files;
+  std::vector<TString> specifications;
   std::ifstream input(listPath.Data());
   if (!input.is_open()) {
     std::cerr << "Cannot open input list / 无法打开输入列表: " << listPath
               << std::endl;
-    return files;
+    return specifications;
   }
 
   const TString listDir = gSystem->DirName(listPath);
@@ -364,34 +484,172 @@ std::vector<TString> ReadInputList(const TString &listPath)
       gSystem->ExpandPathName(relative);
       path = relative;
     }
-    files.push_back(path);
+    specifications.push_back(path);
   }
-  return files;
+  return specifications;
 }
 
-// A single file, comma-separated files, and @list are accepted.
-// 支持单文件、逗号分隔多文件和 @list。
+// Recursively collect only strictly named NFS run ROOT files from one directory.
+// realpath plus visitedDirectories prevents loops through symbolic links.
+// 从目录递归收集严格匹配名称的 NFS run ROOT；realpath 与 visitedDirectories
+// 共同避免软链接形成无限递归。
+void CollectNfsRunFiles(const TString &directory,
+                        std::vector<TString> &candidates,
+                        std::set<std::string> &visitedDirectories)
+{
+  const TString canonicalDirectory = CanonicalInputPath(directory);
+  struct stat directoryStatus;
+  if (!ReadPathStatus(canonicalDirectory, directoryStatus) ||
+      !S_ISDIR(directoryStatus.st_mode)) {
+    return;
+  }
+  if (!visitedDirectories.insert(canonicalDirectory.Data()).second) return;
+
+  DIR *handle = ::opendir(canonicalDirectory.Data());
+  if (!handle) {
+    std::cerr << "Cannot read input directory / 无法读取输入目录: "
+              << canonicalDirectory << std::endl;
+    return;
+  }
+
+  std::vector<std::string> entries;
+  while (dirent *entry = ::readdir(handle)) {
+    const std::string name(entry->d_name);
+    if (name == "." || name == "..") continue;
+    entries.push_back(name);
+  }
+  ::closedir(handle);
+  std::sort(entries.begin(), entries.end());
+
+  for (const auto &entry : entries) {
+    TString child = canonicalDirectory;
+    if (!child.EndsWith("/")) child += "/";
+    child += entry.c_str();
+    child = CanonicalInputPath(child);
+
+    struct stat childStatus;
+    if (!ReadPathStatus(child, childStatus)) continue;
+    if (S_ISDIR(childStatus.st_mode)) {
+      CollectNfsRunFiles(child, candidates, visitedDirectories);
+      continue;
+    }
+    if (!S_ISREG(childStatus.st_mode)) continue;
+    if (ParseNfsRunFileIdentity(child).valid) candidates.push_back(child);
+  }
+}
+
+bool NaturalInputOrder(const TString &left, const TString &right)
+{
+  const NfsRunFileIdentity leftId = ParseNfsRunFileIdentity(left);
+  const NfsRunFileIdentity rightId = ParseNfsRunFileIdentity(right);
+  if (leftId.valid && rightId.valid) {
+    if (leftId.runNumber != rightId.runNumber) {
+      return leftId.runNumber < rightId.runNumber;
+    }
+    if (leftId.partNumber != rightId.partNumber) {
+      return leftId.partNumber < rightId.partNumber;
+    }
+    if (leftId.normalizedName != rightId.normalizedName) {
+      return leftId.normalizedName.CompareTo(rightId.normalizedName) < 0;
+    }
+    if (leftId.mult3 != rightId.mult3) return !leftId.mult3;
+  } else if (leftId.valid != rightId.valid) {
+    return leftId.valid;
+  }
+  return left.CompareTo(right) < 0;
+}
+
+// A single file or directory, CSV mixtures, and @lists containing files and/or
+// directories are all accepted. Explicit files retain the old unrestricted-name
+// behavior; only files discovered inside directories are name-filtered.
+// 支持单文件、单目录、CSV 混合项，以及每行可为文件/目录的 @list。显式文件继续
+// 兼容任意旧文件名；只有目录自动发现的文件应用严格名称过滤。
 std::vector<TString> ResolveInputs(const char *inputSpec)
 {
-  std::vector<TString> files;
+  std::vector<TString> specifications;
   TString text(inputSpec ? inputSpec : "");
   text = text.Strip(TString::kBoth);
   if (text.BeginsWith("@")) {
     TString listPath = text(1, text.Length() - 1);
     listPath = listPath.Strip(TString::kBoth);
-    gSystem->ExpandPathName(listPath);
-    return ReadInputList(listPath);
+    listPath = CanonicalInputPath(listPath);
+    specifications = ReadInputList(listPath);
+  } else {
+    TObjArray *tokens = text.Tokenize(",");
+    for (int i = 0; i < tokens->GetEntriesFast(); ++i) {
+      TString path = static_cast<TObjString *>(tokens->At(i))->GetString();
+      path = path.Strip(TString::kBoth);
+      if (!path.IsNull()) specifications.push_back(path);
+    }
+    delete tokens;
   }
 
-  TObjArray *tokens = text.Tokenize(",");
-  for (int i = 0; i < tokens->GetEntriesFast(); ++i) {
-    TString path = static_cast<TObjString *>(tokens->At(i))->GetString();
-    path = path.Strip(TString::kBoth);
-    if (path.IsNull()) continue;
-    gSystem->ExpandPathName(path);
-    files.push_back(path);
+  std::vector<TString> candidates;
+  std::set<std::string> visitedDirectories;
+  for (const auto &rawSpecification : specifications) {
+    const TString path = CanonicalInputPath(rawSpecification);
+    if (path.Contains("://")) {
+      candidates.push_back(path);
+      continue;
+    }
+    struct stat status;
+    if (!ReadPathStatus(path, status)) {
+      std::cerr << "Input path does not exist / 输入路径不存在: " << path
+                << std::endl;
+      continue;
+    }
+    if (S_ISDIR(status.st_mode)) {
+      CollectNfsRunFiles(path, candidates, visitedDirectories);
+    } else if (S_ISREG(status.st_mode)) {
+      candidates.push_back(path);
+    }
   }
-  delete tokens;
+
+  // Deduplicate by the same normalized basename used by calibration matching.
+  // If both full and mult3 trees exist for one run, prefer the full nfs tree;
+  // this prevents counting the selected mult3 subset a second time.
+  // 按刻度匹配所用标准文件名去重。同一 run 同时存在普通树和 mult3 树时，优先
+  // 普通 nfs 树，防止把其 mult3 子集再次计数。
+  std::map<std::string, TString> selectedByRun;
+  std::vector<TString> otherFiles;
+  std::set<std::string> seenOtherFiles;
+  Long64_t duplicateRunFiles = 0;
+  for (const auto &candidate : candidates) {
+    const TString path = CanonicalInputPath(candidate);
+    const NfsRunFileIdentity identity = ParseNfsRunFileIdentity(path);
+    if (!identity.valid) {
+      if (seenOtherFiles.insert(path.Data()).second) otherFiles.push_back(path);
+      continue;
+    }
+
+    const std::string key(identity.normalizedName.Data());
+    auto found = selectedByRun.find(key);
+    if (found == selectedByRun.end()) {
+      selectedByRun[key] = path;
+      continue;
+    }
+    ++duplicateRunFiles;
+    const NfsRunFileIdentity existing =
+        ParseNfsRunFileIdentity(found->second);
+    const bool preferCandidate =
+        (existing.mult3 && !identity.mult3) ||
+        (existing.mult3 == identity.mult3 &&
+         path.CompareTo(found->second) < 0);
+    if (preferCandidate) found->second = path;
+  }
+
+  std::vector<TString> files;
+  for (const auto &entry : selectedByRun) files.push_back(entry.second);
+  files.insert(files.end(), otherFiles.begin(), otherFiles.end());
+  std::sort(files.begin(), files.end(), NaturalInputOrder);
+
+  std::cout << "Resolved input ROOT files / 解析得到输入 ROOT: "
+            << files.size();
+  if (duplicateRunFiles > 0) {
+    std::cout << " (duplicate run files ignored / 忽略重复 run 文件: "
+              << duplicateRunFiles << ")";
+  }
+  std::cout << std::endl;
   return files;
 }
 
