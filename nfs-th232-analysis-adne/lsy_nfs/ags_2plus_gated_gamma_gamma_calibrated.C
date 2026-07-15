@@ -47,6 +47,196 @@
 // gateWidthKeV 表示连续的 1 keV gate channel 数，与 triple_gamma_gate_fill.C
 // 保持一致；宽度 3 表示中心 +/-1 keV，且包含两个端点。
 
+// =============================================================================
+// Complete positional interface / 完整位置参数接口
+// =============================================================================
+// ROOT calls this function with positional arguments:
+// ROOT 使用位置参数调用下列函数：
+//
+// ags_2plus_gated_gamma_gamma_calibrated(
+//   [ 1] inputFiles,
+//   [ 2] calibrationSummary,
+//   [ 3] agsFile = "/home/user0/work/IJCLAB/nfs_ana/nfs_ags_no_correction_results/_extracted_ags/th232_18_34to24_34.ags",
+//   [ 4] outputFile = "ags_2plus_gated_gamma_gamma_calibrated.root",
+//   [ 5] neutronWindowsMeV = "6:8,10:13,17:20",
+//   [ 6] gateWidthKeV = 3.0,
+//   [ 7] nfsDistanceMeter = 24.0,
+//   [ 8] timeFwhmNs = 20.0,
+//   [ 9] useBgoCsiVeto = true,
+//   [10] maxEntries = -1,
+//   [11] gammaBins = 4096,
+//   [12] gammaMinKeV = 0.0,
+//   [13] gammaMaxKeV = 4096.0,
+//   [14] timeCorrectionMode = "offset",
+//   [15] timeBranchLeaf = "fTime")
+//
+// Only [1] and [2] are required by the C++ signature. The built-in [3] path is
+// machine-specific, so explicitly supplying [3] and [4] is strongly recommended.
+// C++ 函数签名只强制要求 [1][2]；但 [3] 的内置绝对路径与机器绑定，实际运行时
+// 强烈建议总是显式给出 [3] AGS 路径和 [4] 输出路径。
+//
+// IMPORTANT / 重要：
+// ROOT/C++ does not provide named arguments here. To change argument [12], all
+// arguments [1] through [11] must also be written. Only trailing arguments may
+// be omitted, in which case their defaults above are used.
+// 这里不能写“参数名=值”。若要修改第 [12] 项，必须同时写出 [1] 到 [11]；
+// 只有末尾连续的参数可以省略，省略后使用上面列出的默认值。
+//
+// Parameter details / 参数详解
+// -----------------------------------------------------------------------------
+// [1] inputFiles : const char*
+//     Input TreeMaster ROOT files. Three forms are accepted:
+//       a) one file:  "/data/mult3_nfs_run_12_r0.root"
+//       b) CSV list:  "a.root,b.root,c.root"
+//       c) text list: "@mult3_files.txt"
+//     An @list contains one ROOT path per line. Empty lines and lines beginning
+//     with # or // are ignored. Relative paths are resolved relative to the list
+//     file when they are not found from the current directory.
+//     输入 TreeMaster ROOT。支持单文件、逗号分隔文件和 @文本列表。@列表每行
+//     一个 ROOT 路径；空行、# 和 // 开头行忽略。找不到相对路径时，会相对列表
+//     文件所在目录解析。maxEntries 是所有输入文件合计值，不是每个文件各自值。
+//
+// [2] calibrationSummary : const char*
+//     calibration_summary.tsv produced by calibrate_nfs_crystals.sh, or one
+//     detailed calibration txt beginning with "# clover ...". Run matching
+//     uses the basename and removes the "mult3_" prefix, so
+//       mult3_nfs_run_12_r0.root -> nfs_run_12_r0.root.
+//     A file with no matching run calibration is skipped; identity calibration
+//     is NOT silently substituted. Required values are per-crystal
+//     energy_offset, energy_gain, and the requested time correction values.
+//     刻度汇总由 calibrate_nfs_crystals.sh 产生。按文件名逐 run 匹配，并自动去掉
+//     mult3_ 前缀。没有匹配刻度的输入文件会被跳过，不会偷偷采用单位刻度。
+//
+// [3] agsFile : const char*
+//     ASCII GLS/AGS level-scheme file. Its Level, Band, and Gamma sections are
+//     parsed directly. Exact 2+->0+ transitions define single gates. A cascade
+//     pair is accepted only when a 4+->2+ final level equals a 2+->0+ initial
+//     level and both belong to the same canonical nuclide.
+//     ASCII GLS/AGS 能级纲图。代码直接读取 Level/Band/Gamma。所有严格的
+//     2+->0+ 作为单 gate；级联还要求 4+->2+ 的终态 level 与 2+->0+ 的初态
+//     level 完全相同，并属于同一个核素。建议总是显式填写该路径，不依赖默认绝对路径。
+//
+// [4] outputFile : const char*
+//     Output ROOT path. It is opened with RECREATE, so an existing file with the
+//     same name is overwritten. Parent directories must already exist.
+//     输出 ROOT 路径，采用 RECREATE；同名文件会被覆盖，父目录必须预先存在。
+//
+// [5] neutronWindowsMeV : const char*, default "6:8,10:13,17:20"
+//     Independent low:high neutron-energy windows in MeV. These are ranges, not
+//     a sequence of shared bin edges. The lower edge is included and the upper
+//     edge excluded: low <= En < high. Example: "5:8,8:12,17:20".
+//     逗号分隔的独立中子能区，单位 MeV，不是连续边界数组。每区间左闭右开。
+//
+// [6] gateWidthKeV : double, default 3.0
+//     Number of consecutive 1-keV gate channels, not a mathematical full width.
+//     width=3 means center-1, center, center+1 keV; both endpoints are included.
+//     表示连续 1 keV channel 数。3 对应峰位左右各 1 keV，两个端点均包含。
+//
+// [7] nfsDistanceMeter : double, default 24.0 m
+//     Source-to-target neutron flight distance used for the time cut and En
+//     conversion. Use the experiment value, for example 23.396 m, when known.
+//     中子飞行距离，单位 m，用于快时间 cut 和 TOF->En。应填写实际实验距离。
+//
+// [8] timeFwhmNs : double, default 20.0 ns
+//     Time-resolution FWHM used only by the fast-neutron rejection:
+//       sigma_t = timeFwhmNs / 2.355
+//       t_min   = TOF(50 MeV, nfsDistanceMeter)
+//       t_cut   = t_min - 3*sigma_t
+//     A clover with corrected time < t_cut is removed before multiplicity,
+//     event-time, gate, and matrix calculations.
+//     时间分辨 FWHM，单位 ns。修正时间小于上述 t_cut 的 clover 会在后续所有
+//     多重度、事件时间、gate 和矩阵计算前被移除。
+//
+// [9] useBgoCsiVeto : bool, default true
+//     true: remove a clover when its ESS record has BGO>0 or CSI>0.
+//     false: ignore BGO and CSI and do not require ESS branches.
+//     true 时 BGO>0 或 CSI>0 的 clover 不参与后续处理；false 时完全忽略 veto。
+//
+// [10] maxEntries : Long64_t, default -1
+//     >0 processes at most this many TreeMaster entries across all input files.
+//     <=0 processes all entries. Useful values for checks: 1000 or 100000.
+//     正数表示所有输入文件合计最多处理多少 event；<=0 表示全部处理。
+//
+// [11] gammaBins : int, default 4096
+// [12] gammaMinKeV : double, default 0 keV
+// [13] gammaMaxKeV : double, default 4096 keV
+//     X and Y binning of every TH2I gamma-gamma matrix, and X binning of each
+//     cascade-gated TH1I. Values outside the range go to ROOT under/overflow.
+//     矩阵两轴和级联一维谱的能量分 bin。范围外数据仍进入 ROOT 的 under/overflow。
+//     Memory estimate for TH2I matrices:
+//       (1 + number_of_neutron_windows) * gammaBins^2 * 4 bytes.
+//     Defaults create four 4096x4096 matrices, approximately 256 MiB in RAM,
+//     excluding ROOT overhead. Reducing gammaBins to 2048 reduces this by 4x.
+//     默认 3 个中子窗加 1 张总图，共约 256 MiB；bin 数减半，矩阵内存约降为 1/4。
+//
+// [14] timeCorrectionMode : const char*, default "offset"
+//     Selects how calibration-summary coefficients are applied:
+//       "offset"      : t_corr = t_raw + time_offset
+//       "gain"        : t_corr = t_raw * time_gain
+//       "offset_gain" : t_corr = (t_raw + time_offset) * time_gain
+//       "gain_offset" : t_corr = t_raw * time_gain + time_offset
+//     当前逐 run 时间刻度只做平移时使用 "offset"。若汇总文件包含并需要时间 gain，
+//     应按照刻度参数的定义选择另外三种顺序之一。
+//
+// [15] timeBranchLeaf : const char*, default "fTime"
+//     Crystal-level raw-to-analysis time branch to calibrate. The resolver also
+//     accepts split names ending in this leaf, such as Exogam2.fTime.
+//     要读取并刻度的逐 crystal 时间分支叶名；也兼容 Exogam2.fTime 等 split 名称。
+//
+// Event reconstruction and cuts / 事件重建与选择顺序
+// -----------------------------------------------------------------------------
+// 1. Reject crystal records with non-positive/non-finite raw energy or time.
+// 2. Apply the matched crystal energy and time calibration.
+// 3. Sum calibrated crystal energies inside each clover (addback).
+// 4. Set clover time to the calibrated time of its highest calibrated-energy
+//    crystal.
+// 5. Optionally apply BGO/CSI veto, then apply the 50-MeV fast-time cut.
+// 6. Require at least three surviving clovers. Event TOF is the minimum surviving
+//    clover time; neutron energy is calculated from this event TOF and distance.
+// 7. Run every 2+ gate and every physical 4+->2+->0+ cascade pair.
+//
+// 处理顺序严格为：无效 crystal 清理 -> 逐 crystal 刻度 -> clover addback ->
+// 最高能量 crystal 选 clover 时间 -> veto -> 快时间 cut -> 剩余 clover 数>=3 ->
+// 最小 clover 时间作为 event TOF -> 单 gate 矩阵与双 gate 级联一维谱。
+//
+// Output ROOT layout / 输出 ROOT 结构
+// -----------------------------------------------------------------------------
+// gamma_gamma_matrices/
+//   AGS2GateGammaGamma_Total
+//   AGS2GateGammaGamma_En<low>_<high>MeV  (one per requested window)
+// cascade_gated_spectra/
+//   <E4to2>-<E2to0>  (one TH1I per physical cascade pair)
+// metadata/
+//   AGSTransitions, CascadePairs, GateStatistics, NeutronWindowStatistics,
+//   AGS2PlusGateEnergies, AGS2PlusGateMatchedEvents,
+//   AGS2GateAnalysisSummary, AGS2GateAnalysisConfig
+// diagnostics/
+//   AGS2GateAcceptedNeutronEnergy
+//
+// Practical calls / 常用调用示例
+// -----------------------------------------------------------------------------
+// A. Explicitly provide all paths, then use trailing defaults /
+//    显式给出全部路径，其余末尾参数使用默认值：
+// root -l -b -q 'lsy_nfs/ags_2plus_gated_gamma_gamma_calibrated.C(
+//   "@mult3_files.txt","calibration_summary.tsv","/abs/path/th232.ags",
+//   "ags_gate_result.root")'
+//
+// B. Actual distance 23.396 m and custom windows / 实际距离和自定义中子窗：
+// root -l -b -q 'lsy_nfs/ags_2plus_gated_gamma_gamma_calibrated.C(
+//   "@mult3_files.txt","calibration_summary.tsv","/abs/path/th232.ags",
+//   "ags_gate_result.root","6:8,10:13,17:20",3,23.396)'
+//
+// C. Quick 100000-event check with 2048 bins / 快速小样本及低内存矩阵：
+// root -l -b -q 'lsy_nfs/ags_2plus_gated_gamma_gamma_calibrated.C(
+//   "a.root,b.root","calibration_summary.tsv","/abs/path/th232.ags",
+//   "quick.root","6:8,10:13,17:20",3,23.396,20,true,100000,
+//   2048,0,4096,"offset","fTime")'
+//
+// Shell quoting / Shell 引号：outer single quotes protect the complete ROOT
+// expression; every C++ string argument inside still uses double quotes.
+// 外层单引号保护完整 ROOT 表达式，内部字符串参数仍使用双引号。
+// =============================================================================
+
 #include <algorithm>
 #include <array>
 #include <cmath>
