@@ -3,6 +3,34 @@
 这个目录存放只依赖 ROOT 的 NFS 快速检查脚本。
 This directory contains ROOT-only helper macros for NFS quick checks.
 
+## Raw InnerM6 vs fTime / 原始能量-时间二维图
+
+`draw_crystal_inner6m_vs_ftime.C` reads the primitive `MfmFrameTree` and
+creates one two-dimensional histogram for every LUT-mapped crystal. The
+horizontal axis is `fTime` in ns and the vertical axis is raw `InnerM6`.
+
+脚本读取基础 `MfmFrameTree`，为 LUT 中的每个 crystal 创建一张二维图。横轴为
+`fTime (ns)`，纵轴为原始 `InnerM6 (ADC channel)`。
+
+```bash
+cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
+
+root -l -b -q \
+  'lsy_nfs/draw_crystal_inner6m_vs_ftime.C(
+    "/home/user0/work/IJCLAB/nfs_ana/root_tree/run134_0.root",
+    "/home/user0/work/IJCLAB/nfs_ana/root_tree/run134_inner6m_vs_ftime.root")'
+```
+
+The primitive tree currently has no stored `fTime`, so the default conversion
+is `(65536-exo_delta_t)*0.024-700.4 ns`. A scalar `fTime` branch is used
+directly when present. No energy threshold, positive-Time cut, BGO/CSI veto,
+multiplicity selection, calibration, or random dither is applied. Zero
+InnerM6 and negative fTime are retained.
+
+当前基础树没有直接保存 `fTime`，因此默认按
+`(65536-exo_delta_t)*0.024-700.4 ns` 计算。脚本不应用能量阈值、正时间 cut、
+BGO/CSI veto、多重度、能量刻度或随机展宽；零能量与负时间都会保留。
+
 ## Energy Peak Check / 能量峰位检查
 
 在每个 crystal 能量谱中，在给定能量窗口内取最大 bin 作为峰位。
@@ -544,4 +572,3 @@ Main output objects:
 - `c_Mult3GammaSpec_*`, `c_Mult3GammaGammaMatrix_*`, `c_Mult3GammaEnergyVsTime`: canvases with labels / 带标注的画布
 - `FissionEventAnaSummary`: processing summary / 处理统计摘要
 - `FissionEventAnaConfig`: input parameters / 输入参数记录
-
