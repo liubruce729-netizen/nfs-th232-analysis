@@ -4,8 +4,14 @@
 // No physics cut is applied. Zero InnerM6 and negative fTime are retained.
 // 不应用物理 cut；InnerM6=0 和负 fTime 都会保留。
 //
-// The primitive MfmFrameTree currently has exo_delta_t but no stored fTime.
-// In that case this macro uses the same NFS conversion as ADNE:
+// Supported inputs:
+//   * RawEventTree from mfm_to_raw_event_tree.C: vector branches per event;
+//   * MfmFrameTree from mfm_to_raw_root_tree.C: scalar branches per frame.
+// 支持 mfm_to_raw_event_tree.C 的 event/vector 树和
+// mfm_to_raw_root_tree.C 的 frame/scalar 树。
+//
+// Raw input trees normally have DeltaT but no stored fTime. In that case this
+// macro uses the same NFS conversion as ADNE:
 //   fTime = (65536 - DeltaT) * 0.024 + gammaFlashOffset
 // If a scalar fTime branch exists, it is read directly instead.
 //
@@ -97,6 +103,50 @@ std::vector<std::string> ExpandInputs(const char *inputSpec) {
   AddInputToken(inputSpec, files);
   if (files.empty()) throw std::runtime_error("No input ROOT files were found");
   return files;
+}
+
+enum class InputTreeKind {
+  kRawEventTree,
+  kMfmFrameTree
+};
+
+struct InputTreeInfo {
+  InputTreeKind kind = InputTreeKind::kRawEventTree;
+  std::string name;
+};
+
+InputTreeInfo DetectInputTree(const std::vector<std::string> &files) {
+  InputTreeInfo result;
+  bool selected = false;
+
+  for (const std::string &path : files) {
+    std::unique_ptr<TFile> input(TFile::Open(path.c_str(), "READ"));
+    if (!input || input->IsZombie()) {
+      throw std::runtime_error("Cannot open input ROOT file: " + path);
+    }
+
+    const bool hasRawEventTree =
+        dynamic_cast<TTree *>(input->Get("RawEventTree")) != nullptr;
+    const bool hasMfmFrameTree =
+        dynamic_cast<TTree *>(input->Get("MfmFrameTree")) != nullptr;
+    if (!hasRawEventTree && !hasMfmFrameTree) {
+      throw std::runtime_error(
+          "Input has neither RawEventTree nor MfmFrameTree: " + path);
+    }
+
+    const InputTreeInfo current =
+        hasRawEventTree
+            ? InputTreeInfo{InputTreeKind::kRawEventTree, "RawEventTree"}
+            : InputTreeInfo{InputTreeKind::kMfmFrameTree, "MfmFrameTree"};
+    if (!selected) {
+      result = current;
+      selected = true;
+    } else if (current.kind != result.kind) {
+      throw std::runtime_error(
+          "Input list mixes RawEventTree and MfmFrameTree files");
+    }
+  }
+  return result;
 }
 
 std::string FindDefaultLut() {
@@ -232,26 +282,23 @@ void draw_crystal_inner6m_vs_ftime(
       timeCalibration = LoadTimeCalibration(correctionFile);
     }
 
-    TChain chain("MfmFrameTree");
+    const InputTreeInfo inputTree = DetectInputTree(inputs);
+    const bool rawEventMode = inputTree.kind == InputTreeKind::kRawEventTree;
+    TChain chain(inputTree.name.c_str());
     for (const std::string &path : inputs) {
       if (chain.Add(path.c_str()) == 0) {
         throw std::runtime_error("Cannot add input ROOT file: " + path);
       }
     }
 
-    const std::array<const char *, 4> alwaysRequired = {
-        "is_exo2", "exo_board_id", "exo_lut_halfboard", "exo_inner6m"};
-    for (const char *name : alwaysRequired) {
+    auto requireBranch = [&](const char *name) {
       if (!chain.GetBranch(name)) {
-        throw std::runtime_error(std::string("Missing MfmFrameTree branch: ") + name);
+        throw std::runtime_error(
+            "Missing " + inputTree.name + " branch: " + std::string(name));
       }
-    }
+    };
 
-    const bool hasStoredFTime = chain.GetBranch("fTime") != nullptr;
-    if (!hasStoredFTime && !chain.GetBranch("exo_delta_t")) {
-      throw std::runtime_error(
-          "Tree has neither scalar fTime nor exo_delta_t for calculating fTime");
-    }
+    bool hasStoredFTime = false;
     Bool_t isExo2 = false;
     Int_t board = -1;
     Int_t halfBoard = -1;
@@ -261,32 +308,55 @@ void draw_crystal_inner6m_vs_ftime(
     Double_t storedFTimeDouble = 0.0;
     bool storedFTimeIsFloat = false;
 
-    chain.SetBranchStatus("*", 0);
-    chain.SetBranchStatus("is_exo2", 1);
-    chain.SetBranchStatus("exo_board_id", 1);
-    chain.SetBranchStatus("exo_lut_halfboard", 1);
-    chain.SetBranchStatus("exo_inner6m", 1);
-    if (hasStoredFTime) chain.SetBranchStatus("fTime", 1);
-    else chain.SetBranchStatus("exo_delta_t", 1);
+    // RawEventTree stores all EXO fires in aligned vectors.
+    // RawEventTree 将一个 event 内的全部 EXO fire 保存在等长 vector 中。
+    std::vector<UShort_t> *rawCristalIds = nullptr;
+    std::vector<UShort_t> *rawDeltaTs = nullptr;
+    std::vector<UShort_t> *rawInnerM6s = nullptr;
 
-    chain.SetBranchAddress("is_exo2", &isExo2);
-    chain.SetBranchAddress("exo_board_id", &board);
-    chain.SetBranchAddress("exo_lut_halfboard", &halfBoard);
-    chain.SetBranchAddress("exo_inner6m", &innerM6);
-    if (hasStoredFTime) {
-      TLeaf *leaf = chain.GetBranch("fTime")->GetLeaf("fTime");
-      if (!leaf) throw std::runtime_error("Cannot inspect scalar fTime leaf");
-      const std::string type = leaf->GetTypeName();
-      if (type == "Float_t" || type == "float") {
-        storedFTimeIsFloat = true;
-        chain.SetBranchAddress("fTime", &storedFTimeFloat);
-      } else if (type == "Double_t" || type == "double") {
-        chain.SetBranchAddress("fTime", &storedFTimeDouble);
-      } else {
-        throw std::runtime_error("Unsupported scalar fTime type: " + type);
+    chain.SetBranchStatus("*", 0);
+    if (rawEventMode) {
+      const std::array<const char *, 3> required = {
+          "raw_exo_cristal_id", "raw_exo_delta_t", "raw_exo_inner_m6"};
+      for (const char *name : required) {
+        requireBranch(name);
+        chain.SetBranchStatus(name, 1);
       }
+      chain.SetBranchAddress("raw_exo_cristal_id", &rawCristalIds);
+      chain.SetBranchAddress("raw_exo_delta_t", &rawDeltaTs);
+      chain.SetBranchAddress("raw_exo_inner_m6", &rawInnerM6s);
     } else {
-      chain.SetBranchAddress("exo_delta_t", &rawDeltaT);
+      const std::array<const char *, 4> required = {
+          "is_exo2", "exo_board_id", "exo_lut_halfboard", "exo_inner6m"};
+      for (const char *name : required) {
+        requireBranch(name);
+        chain.SetBranchStatus(name, 1);
+      }
+
+      hasStoredFTime = chain.GetBranch("fTime") != nullptr;
+      if (!hasStoredFTime) requireBranch("exo_delta_t");
+      if (hasStoredFTime) chain.SetBranchStatus("fTime", 1);
+      else chain.SetBranchStatus("exo_delta_t", 1);
+
+      chain.SetBranchAddress("is_exo2", &isExo2);
+      chain.SetBranchAddress("exo_board_id", &board);
+      chain.SetBranchAddress("exo_lut_halfboard", &halfBoard);
+      chain.SetBranchAddress("exo_inner6m", &innerM6);
+      if (hasStoredFTime) {
+        TLeaf *leaf = chain.GetBranch("fTime")->GetLeaf("fTime");
+        if (!leaf) throw std::runtime_error("Cannot inspect scalar fTime leaf");
+        const std::string type = leaf->GetTypeName();
+        if (type == "Float_t" || type == "float") {
+          storedFTimeIsFloat = true;
+          chain.SetBranchAddress("fTime", &storedFTimeFloat);
+        } else if (type == "Double_t" || type == "double") {
+          chain.SetBranchAddress("fTime", &storedFTimeDouble);
+        } else {
+          throw std::runtime_error("Unsupported scalar fTime type: " + type);
+        }
+      } else {
+        chain.SetBranchAddress("exo_delta_t", &rawDeltaT);
+      }
     }
 
     chain.SetCacheSize(128LL * 1024LL * 1024LL);
@@ -335,36 +405,81 @@ void draw_crystal_inner6m_vs_ftime(
     Long64_t filledRows = 0;
     Long64_t unknownLutRows = 0;
     Long64_t malformedRows = 0;
+    Long64_t vectorSizeMismatchEvents = 0;
+    Long64_t vectorElementsDropped = 0;
     const Long64_t availableRows = chain.GetEntries();
     const Long64_t rowsToRead =
         (maxRows >= 0) ? std::min(maxRows, availableRows) : availableRows;
 
-    for (Long64_t row = 0; row < rowsToRead; ++row) {
-      if (chain.GetEntry(row) <= 0) continue;
-      ++rowsRead;
-      if (!isExo2) continue;
+    auto fillFire = [&](int fireBoard, int fireHalfBoard, int fireInnerM6,
+                        int fireRawDeltaT, bool useStoredTime,
+                        double fireStoredTime) {
       ++exo2Rows;
-
-      const auto found = lut.find({board, halfBoard});
+      const auto found = lut.find({fireBoard, fireHalfBoard});
       if (found == lut.end()) {
         ++unknownLutRows;
-        continue;
+        return;
       }
-      if (innerM6 < 0 || (!hasStoredFTime && (rawDeltaT < 0 || rawDeltaT > 65535))) {
+      if (fireInnerM6 < 0 ||
+          (!useStoredTime && (fireRawDeltaT < 0 || fireRawDeltaT > 65535))) {
         ++malformedRows;
-        continue;
+        return;
       }
 
       const Detector &detector = found->second;
       const int id = detector.clover * kCrystalCount + detector.crystal;
       const double fTime =
-          hasStoredFTime
-              ? (storedFTimeIsFloat ? static_cast<double>(storedFTimeFloat)
-                                    : storedFTimeDouble)
-              : CalculateFTime(rawDeltaT, id, gammaFlashOffsetNs,
+          useStoredTime
+              ? fireStoredTime
+              : CalculateFTime(fireRawDeltaT, id, gammaFlashOffsetNs,
                                crystalTimeCorrection, timeCalibration);
-      histograms[id]->Fill(fTime, static_cast<double>(innerM6));
+      histograms[id]->Fill(fTime, static_cast<double>(fireInnerM6));
       ++filledRows;
+    };
+
+    for (Long64_t row = 0; row < rowsToRead; ++row) {
+      if (chain.GetEntry(row) <= 0) continue;
+      ++rowsRead;
+
+      if (rawEventMode) {
+        if (!rawCristalIds || !rawDeltaTs || !rawInnerM6s) {
+          ++malformedRows;
+          continue;
+        }
+        const std::size_t count =
+            std::min({rawCristalIds->size(), rawDeltaTs->size(),
+                      rawInnerM6s->size()});
+        const std::size_t maximum =
+            std::max({rawCristalIds->size(), rawDeltaTs->size(),
+                      rawInnerM6s->size()});
+        if (count != maximum) {
+          ++vectorSizeMismatchEvents;
+          vectorElementsDropped += static_cast<Long64_t>(maximum - count);
+        }
+
+        for (std::size_t fire = 0; fire < count; ++fire) {
+          // MFMlib:
+          // board = (CristalId >> 5) & 0x7ff
+          // channel = CristalId & 0x1f; ADNE maps channel 0 to half 0
+          // and every nonzero channel to half 1.
+          // MFMlib 解码高位 board、低 5 bit channel；ADNE 将低位 0
+          // 归入 half-board 0，其他值归入 half-board 1。
+          const UShort_t rawId = rawCristalIds->at(fire);
+          const int fireBoard = (rawId >> 5) & 0x7ff;
+          const int channel = rawId & 0x1f;
+          const int fireHalfBoard = channel == 0 ? 0 : 1;
+          fillFire(fireBoard, fireHalfBoard,
+                   static_cast<int>(rawInnerM6s->at(fire)),
+                   static_cast<int>(rawDeltaTs->at(fire)), false, 0.0);
+        }
+      } else {
+        if (!isExo2) continue;
+        const double fireStoredTime =
+            storedFTimeIsFloat ? static_cast<double>(storedFTimeFloat)
+                               : storedFTimeDouble;
+        fillFire(board, halfBoard, innerM6, rawDeltaT,
+                 hasStoredFTime, fireStoredTime);
+      }
 
       if ((row + 1) % 5000000 == 0) {
         std::cout << "Processed " << (row + 1) << "/" << rowsToRead << " rows\n";
@@ -387,11 +502,14 @@ void draw_crystal_inner6m_vs_ftime(
     summary.Branch("filledRows", &filledRows);
     summary.Branch("unknownLutRows", &unknownLutRows);
     summary.Branch("malformedRows", &malformedRows);
+    summary.Branch("vectorSizeMismatchEvents", &vectorSizeMismatchEvents);
+    summary.Branch("vectorElementsDropped", &vectorElementsDropped);
     summary.Fill();
     summary.Write();
 
     std::ostringstream configuration;
-    configuration << "lut=" << lutPath
+    configuration << "input_tree=" << inputTree.name
+                  << ";lut=" << lutPath
                   << ";stored_fTime=" << (hasStoredFTime ? 1 : 0)
                   << ";gamma_flash_offset_ns=" << gammaFlashOffsetNs
                   << ";crystal_time_correction=" << (crystalTimeCorrection ? 1 : 0)
@@ -404,6 +522,7 @@ void draw_crystal_inner6m_vs_ftime(
     output.Close();
 
     std::cout << "\nInput files: " << inputs.size()
+              << "\nInput tree: " << inputTree.name
               << "\nLUT: " << lutPath
               << "\nfTime source: "
               << (hasStoredFTime ? "stored fTime branch" : "calculated from exo_delta_t")
@@ -412,6 +531,8 @@ void draw_crystal_inner6m_vs_ftime(
               << "\nFilled rows: " << filledRows
               << "\nUnknown LUT rows: " << unknownLutRows
               << "\nMalformed rows: " << malformedRows
+              << "\nVector-size mismatch events: " << vectorSizeMismatchEvents
+              << "\nVector elements dropped: " << vectorElementsDropped
               << "\nOutput: " << outputFile << '\n';
   } catch (const std::exception &error) {
     std::cerr << "draw_crystal_inner6m_vs_ftime: " << error.what() << '\n';

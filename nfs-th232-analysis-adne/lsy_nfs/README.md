@@ -5,12 +5,21 @@ This directory contains ROOT-only helper macros for NFS quick checks.
 
 ## Raw InnerM6 vs fTime / 原始能量-时间二维图
 
-`draw_crystal_inner6m_vs_ftime.C` reads the primitive `MfmFrameTree` and
-creates one two-dimensional histogram for every LUT-mapped crystal. The
+`draw_crystal_inner6m_vs_ftime.C` automatically recognizes both raw ROOT
+formats produced by this repository:
+
+- `RawEventTree` from `mfm_to_raw_event_tree.C`: one entry per top event and
+  aligned `raw_exo_*` vectors for its EXO fires;
+- `MfmFrameTree` from `mfm_to_raw_root_tree.C`: one scalar row per unfolded
+  frame.
+
+It creates one two-dimensional histogram for every LUT-mapped crystal. The
 horizontal axis is `fTime` in ns and the vertical axis is raw `InnerM6`.
 
-脚本读取基础 `MfmFrameTree`，为 LUT 中的每个 crystal 创建一张二维图。横轴为
-`fTime (ns)`，纵轴为原始 `InnerM6 (ADC channel)`。
+脚本会自动识别两种 raw ROOT 结构：`mfm_to_raw_event_tree.C` 生成的
+event/vector 型 `RawEventTree`，以及 `mfm_to_raw_root_tree.C` 生成的
+frame/scalar 型 `MfmFrameTree`。它为 LUT 中的每个 crystal 创建一张二维图，
+横轴为 `fTime (ns)`，纵轴为原始 `InnerM6 (ADC channel)`。
 
 ```bash
 cd /home/user0/work/IJCLAB/NFS/nfs-th232-analysis/nfs-th232-analysis-adne
@@ -21,11 +30,16 @@ root -l -b -q \
     "/home/user0/work/IJCLAB/nfs_ana/root_tree/run134_inner6m_vs_ftime.root")'
 ```
 
-The primitive tree currently has no stored `fTime`, so the default conversion
+Raw trees currently have no stored `fTime`, so the default conversion
 is `(65536-exo_delta_t)*0.024-700.4 ns`. A scalar `fTime` branch is used
 directly when present. No energy threshold, positive-Time cut, BGO/CSI veto,
 multiplicity selection, calibration, or random dither is applied. Zero
 InnerM6 and negative fTime are retained.
+
+For `RawEventTree`, the macro decodes the composite `raw_exo_cristal_id` with
+the MFMlib rules: `board=(id>>5)&0x7ff`, `channel=id&0x1f`, then maps channel
+0 to LUT half-board 0 and every nonzero channel to half-board 1. The LUT
+finally supplies the physical clover and crystal numbers.
 
 当前基础树没有直接保存 `fTime`，因此默认按
 `(65536-exo_delta_t)*0.024-700.4 ns` 计算。脚本不应用能量阈值、正时间 cut、
